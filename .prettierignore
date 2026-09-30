@@ -1,0 +1,10 @@
+fixtures/**
+node_modules/
+dist/
+mockup/dist/
+bun.lock
+PLAN.md
+BRIEF.md
+src/cli/agent-help.md
+skill/margin/SKILL.md
+AGENTS.snippet.md
