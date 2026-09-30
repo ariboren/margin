@@ -1,0 +1,233 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { createAnchor } from "../core/anchor.ts";
+import { createThread } from "../core/threads.ts";
+import { agentHelp, run, stripFinalNewline, type Io, type ServerCommands } from "./main.ts";
+import { DOC, sandbox, type Sandbox } from "./testing.ts";
+
+const MAIN = join(import.meta.dir, "main.ts");
+
+let box: Sandbox;
+
+beforeEach(() => {
+    box = sandbox();
+});
+
+afterEach(() => {
+    box.cleanup();
+});
+
+/** The real bin in a child process, cwd in the sandbox, no daemon anywhere. */
+function margin(args: string[], options: { stdin?: string; env?: Record<string, string> } = {}) {
+    const result = Bun.spawnSync(["bun", MAIN, ...args], {
+        cwd: box.dir,
+        env: { ...process.env, ...box.env, ...options.env },
+        stdin: options.stdin === undefined ? "ignore" : new TextEncoder().encode(options.stdin),
+    });
+    return { code: result.exitCode, stdout: result.stdout.toString() };
+}
+
+describe("every contract command against a temp dir with no daemon", () => {
+    test("watch, pending, show, reply, suggest, resolve and agent-help", async () => {
+        await box.comment("cold path", "Why rarely?");
+        expect(margin(["watch", "doc.md", "--once"])).toEqual({
+            code: 0,
+            stdout: 'new c1 "Findings"\n',
+        });
+        expect(margin(["pending", "doc.md"]).stdout).toStartWith("c1 open L5 Findings\n");
+        expect(JSON.parse(margin(["pending", "doc.md", "--json"]).stdout)).toMatchObject({
+            threads: [{ id: "c1", state: "working" }],
+            edits: [],
+        });
+        expect(margin(["show", "c1"]).stdout).toContain("\nunit:\nThe cache is warm");
+        expect(margin(["reply", "c1", "Checking"]).stdout).toBe("ok c1 replied\n");
+        expect(margin(["suggest", "c1", "--replace", "slow path", "-m", "Renamed"]).stdout).toBe(
+            "ok c1 replied\n",
+        );
+        expect(margin(["suggest", "c1", "--replace", "slow path", "--apply"]).stdout).toBe(
+            "ok c1 replied\n",
+        );
+        expect(box.text()).toBe(DOC.replace("cold path", "slow path"));
+        expect(margin(["suggest", "--find", "first tile", "--replace", "first image"]).stdout).toBe(
+            "ok c2 replied\n",
+        );
+        expect(margin(["resolve", "c2"]).stdout).toBe("ok c2 resolved\n");
+        expect(margin(["reply", "c1", "Done", "--resolve"]).stdout).toBe("ok c1 resolved\n");
+        expect(margin(["agent-help"]).stdout).toBe(agentHelp());
+        expect(margin(["pending", "doc.md"]).stdout).toBe("none\n");
+    });
+
+    test("pending --wait blocks until a comment lands", async () => {
+        const child = Bun.spawn(["bun", MAIN, "pending", "doc.md", "--wait"], {
+            cwd: box.dir,
+            env: { ...process.env, ...box.env },
+            stdout: "pipe",
+        });
+        await Bun.sleep(500);
+        await box.comment("cold path", "Why?");
+        expect(await child.exited).toBe(0);
+        expect(await new Response(child.stdout).text()).toStartWith("c1 open L5 Findings\n");
+    });
+
+    test("--replace - round-trips backticks, $ and backslashes from stdin", async () => {
+        await box.comment("cold path", "Rename");
+        margin(["pending", "doc.md"]);
+        const replacement = "`$HOME` and ${x} and $(pwd) and \\n and 'q' \"dq\"";
+        expect(
+            margin(["suggest", "c1", "--replace", "-", "--apply"], { stdin: `${replacement}\n` })
+                .stdout,
+        ).toBe("ok c1 replied\n");
+        expect(readFileSync(box.doc, "utf8")).toBe(DOC.replace("cold path", replacement));
+    });
+
+    test("a doc path works before the id", async () => {
+        await box.comment("cold path", "Why?");
+        expect(margin(["reply", "doc.md", "c1", "Hi"]).stdout).toBe("ok c1 replied\n");
+    });
+
+    test("MARGIN_DOC picks the doc", async () => {
+        await box.comment("cold path", "Why?");
+        expect(margin(["reply", "c1", "Hi"], { env: { MARGIN_DOC: box.doc } }).stdout).toBe(
+            "ok c1 replied\n",
+        );
+    });
+
+    test("an id held by several recent docs asks for the doc", async () => {
+        mkdirSync(join(box.dir, "b"));
+        const second = join(box.dir, "b", "doc.md");
+        copyFileSync(box.doc, second);
+        await box.comment("cold path", "A");
+        margin(["pending", "doc.md"]);
+        margin(["pending", "b/doc.md"]);
+        expect(margin(["reply", "c1", "Hi"]).stdout).toBe("ok c1 replied\n");
+
+        await createThread(second, (id) => [
+            {
+                type: "comment",
+                by: "user",
+                id,
+                anchor: createAnchor(DOC, { start: 0, end: 7 }),
+                text: "B",
+                draft: false,
+            },
+        ]);
+        expect(margin(["reply", "c1", "Hi"])).toEqual({
+            code: 1,
+            stdout: "err c1 not-unique; pass the doc: b/doc.md doc.md\n",
+        });
+        expect(margin(["reply", "c7", "Hi"])).toEqual({
+            code: 1,
+            stdout: "err c7 not-found; pass the doc: b/doc.md doc.md\n",
+        });
+    });
+
+    test("with no recent docs the error says to pass the doc", () => {
+        expect(margin(["show", "c1"])).toEqual({
+            code: 1,
+            stdout: "err c1 not-found; pass the doc\n",
+        });
+    });
+
+    for (const args of [["watch", "--once"], ["pending", "--wait"], ["pending"]]) {
+        test(`${args.join(" ")} on a missing doc fails fast and creates nothing`, () => {
+            mkdirSync(join(box.dir, "empty"));
+            for (const doc of ["empty/nope.md", "empty"]) {
+                const result = Bun.spawnSync(["bun", MAIN, args[0]!, doc, ...args.slice(1)], {
+                    cwd: box.dir,
+                    env: { ...process.env, ...box.env },
+                    stdin: "ignore",
+                    timeout: 5_000,
+                });
+                expect({ code: result.exitCode, stdout: result.stdout.toString() }).toEqual({
+                    code: 1,
+                    stdout: `err ${doc} not-found\n`,
+                });
+            }
+            expect(existsSync(join(box.dir, "empty", ".margin"))).toBe(false);
+        });
+    }
+
+    for (const args of [
+        ["reply", "c1", "Hi"],
+        ["resolve", "c1"],
+        ["suggest", "c1", "--replace", "x"],
+    ]) {
+        test(`${args[0]} on a mistyped doc names the doc and creates nothing`, async () => {
+            await box.comment("cold path", "Why?");
+            mkdirSync(join(box.dir, "empty"));
+            const result = margin([args[0]!, "empty/nope.md", ...args.slice(1)]);
+            expect(result).toEqual({ code: 1, stdout: "err empty/nope.md not-found\n" });
+            expect(existsSync(join(box.dir, "empty", ".margin"))).toBe(false);
+        });
+    }
+
+    test("MARGIN_DOC naming no file is the same error", () => {
+        expect(margin(["show", "c1"], { env: { MARGIN_DOC: "gone.md" } })).toEqual({
+            code: 1,
+            stdout: "err gone.md not-found\n",
+        });
+    });
+
+    test("bad arguments are a short error", () => {
+        expect(margin(["reply"]).stdout).toBe("err bad-args; thread id missing\n");
+        expect(margin(["suggest", "c1"]).code).toBe(1);
+        expect(margin(["reply", "c1", "--nope"]).stdout).toStartWith("err bad-args;");
+    });
+
+    test("setup --user --force installs the skill under HOME", () => {
+        const home = join(box.dir, "home");
+        const result = margin(["setup", "--user", "--force"], { env: { HOME: home } });
+        expect(result.code).toBe(0);
+        expect(result.stdout).toStartWith("ok installed ~/.claude/skills/margin/SKILL.md\n");
+        expect(existsSync(join(home, ".claude/skills/margin/SKILL.md"))).toBe(true);
+    });
+});
+
+function io(isTTY = false): Io & { out: () => string } {
+    let stdout = "";
+    return {
+        cwd: box.dir,
+        env: box.env,
+        isTTY,
+        write: (text) => {
+            stdout += text;
+        },
+        stdin: async () => "",
+        out: () => stdout,
+    };
+}
+
+describe("margin <doc>", () => {
+    const server: ServerCommands = {
+        async open(_path, target) {
+            target.write("http://127.0.0.1:1/d/x?t=token\n");
+            return 0;
+        },
+        stop: async () => 0,
+        status: async () => 0,
+    };
+
+    test("prints agent-help after the URL when stdout is not a TTY", async () => {
+        const target = io(false);
+        expect(await run(["doc.md"], target, server)).toBe(0);
+        expect(target.out()).toBe(`http://127.0.0.1:1/d/x?t=token\n${agentHelp()}`);
+    });
+
+    test("prints only the URL on a terminal", async () => {
+        const target = io(true);
+        await run(["doc.md"], target, server);
+        expect(target.out()).toBe("http://127.0.0.1:1/d/x?t=token\n");
+    });
+});
+
+test("agent-help stays within its ceiling", () => {
+    expect(new TextEncoder().encode(agentHelp()).length).toBeLessThanOrEqual(1400);
+});
+
+test("one trailing newline is stripped from stdin, no more", () => {
+    expect(stripFinalNewline("a\n")).toBe("a");
+    expect(stripFinalNewline("a\r\n")).toBe("a");
+    expect(stripFinalNewline("a\n\n")).toBe("a\n");
+    expect(stripFinalNewline("a")).toBe("a");
+});

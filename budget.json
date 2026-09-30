@@ -1,0 +1,10 @@
+{
+    "watch": 120,
+    "pendingThreadMedian": 700,
+    "pendingThreadMax": 1300,
+    "pendingEditBase": 200,
+    "pendingEditExtraHunk": 60,
+    "ack": 24,
+    "agentHelp": 1400,
+    "fullLoopTenThreads": 8000
+}
