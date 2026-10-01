@@ -4,6 +4,7 @@ import {
     mkdirSync,
     mkdtempSync,
     readdirSync,
+    renameSync,
     rmSync,
     symlinkSync,
     writeFileSync,
@@ -22,6 +23,7 @@ let root: string;
 let server: MarginServer;
 const openedUrls: string[] = [];
 const openedFiles: string[] = [];
+const revealedFiles: string[] = [];
 
 beforeAll(async () => {
     root = mkdtempSync(join(tmpdir(), "margin-daemon-"));
@@ -58,6 +60,10 @@ beforeAll(async () => {
         openFile: async (path) => {
             openedFiles.push(path);
             return "system";
+        },
+        revealFile: async (path) => {
+            revealedFiles.push(path);
+            return path.endsWith("edge-nonl.md") ? "none" : "system";
         },
     });
 });
@@ -120,6 +126,62 @@ describe("opening files and links", () => {
             expect(await response.json()).toEqual({ error: "not-openable" });
         }
         expect(openedFiles.length).toBe(count);
+    });
+
+    test("open-file with reveal shows the doc's own path, whatever else the page sends", async () => {
+        const { docId } = await server.register(docPath("edge-crlf.md"));
+        const path = server.session(docId)!.path;
+        const opens = openedFiles.length;
+        for (const body of [{ reveal: true }, { reveal: true, path: "/etc/hosts" }]) {
+            const response = await post(routes.openFile(docId), body);
+            expect(await response.json()).toEqual({ opened: "system" });
+            expect(revealedFiles.at(-1)).toBe(path);
+        }
+        expect(openedFiles.length).toBe(opens);
+        const reveals = revealedFiles.length;
+        await post(routes.openFile(docId), { reveal: false });
+        expect(openedFiles.at(-1)).toBe(path);
+        expect(revealedFiles.length).toBe(reveals);
+    });
+
+    test("reveal takes no link and only a boolean", async () => {
+        const { docId } = await server.register(docPath("edge-crlf.md"));
+        const count = revealedFiles.length + openedFiles.length;
+        for (const body of [
+            { reveal: true, link: "edge-bom.md" },
+            { reveal: true, link: "/etc/hosts" },
+            { reveal: "/etc/hosts" },
+            { reveal: 1 },
+        ]) {
+            const response = await post(routes.openFile(docId), body);
+            expect({ body, status: response.status }).toEqual({ body, status: 400 });
+        }
+        expect(revealedFiles.length + openedFiles.length).toBe(count);
+    });
+
+    test("reveal answers none when no command worked", async () => {
+        const { docId } = await server.register(docPath("edge-nonl.md"));
+        const response = await post(routes.openFile(docId), { reveal: true });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ opened: "none" });
+    });
+
+    test("a doc missing on disk is neither opened nor revealed", async () => {
+        const path = docPath("gone.md");
+        writeFileSync(path, "# Going\n");
+        const { docId } = await server.register(path);
+        renameSync(path, `${path}.away`);
+        const deadline = Date.now() + 5_000;
+        while (!server.session(docId)!.isMissing && Date.now() < deadline) {
+            await Bun.sleep(20);
+        }
+        const count = revealedFiles.length + openedFiles.length;
+        for (const body of [{ reveal: true }, {}]) {
+            const response = await post(routes.openFile(docId), body);
+            expect(response.status).toBe(404);
+            expect(await response.json()).toEqual({ error: "not-found" });
+        }
+        expect(revealedFiles.length + openedFiles.length).toBe(count);
     });
 
     test("open-url takes http(s) only", async () => {

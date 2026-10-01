@@ -34,6 +34,28 @@ function inOrcaBrowser(): boolean {
     return /\bOrca\//.test(navigator.userAgent);
 }
 
+export interface OpeningCopy {
+    /** The daemon refused: the file is gone, or the link is not one it opens. */
+    refused: string;
+    /** The daemon tried and no command on this machine worked. */
+    failed: string;
+}
+
+/** What to tell the reader about a host action, or undefined when it worked. */
+export async function openingProblem(
+    opening: Promise<{ opened: string }>,
+    copy: OpeningCopy,
+): Promise<string | undefined> {
+    try {
+        return (await opening).opened === "none" ? copy.failed : undefined;
+    } catch (caught) {
+        return caught instanceof RequestError &&
+            (caught.status === 404 || caught.body?.error === "not-openable")
+            ? copy.refused
+            : "Could not reach the margin daemon.";
+    }
+}
+
 /** The daemon's page: boot data from the shell, the store over the protocol, then the app. */
 export async function bootDaemonPage(mount: Mount): Promise<void> {
     const boot = JSON.parse(document.getElementById(BOOT_ELEMENT)!.textContent!) as PageBoot;
@@ -56,32 +78,35 @@ export async function bootDaemonPage(mount: Mount): Promise<void> {
         );
         return;
     }
-    const report = async (opening: Promise<unknown>, refused: string) => {
-        try {
-            await opening;
-        } catch (caught) {
-            store.reportProblem(
-                caught instanceof RequestError &&
-                    (caught.status === 404 || caught.body?.error === "not-openable")
-                    ? refused
-                    : "Could not reach the margin daemon.",
-            );
+    const report = async (opening: Promise<{ opened: string }>, copy: OpeningCopy) => {
+        const problem = await openingProblem(opening, copy);
+        if (problem) {
+            store.reportProblem(problem);
         }
     };
     mount(document.getElementById("app")!, store, {
         path: boot.path,
         relativePath: boot.relativePath,
         openFile: (link) =>
-            void report(
-                transport.openFile(link),
-                link === undefined
-                    ? "The file is missing on disk."
-                    : "That link does not lead to a file in this repository.",
-            ),
+            void report(transport.openFile(link), {
+                refused:
+                    link === undefined
+                        ? "The file is missing on disk."
+                        : "That link does not lead to a file in this repository.",
+                failed: "The file could not be opened.",
+            }),
+        revealFile: () =>
+            void report(transport.revealFile(), {
+                refused: "The file is missing on disk.",
+                failed: "The file could not be shown in the file manager.",
+            }),
         ...(inOrcaBrowser()
             ? {
                   openUrl: (url: string) =>
-                      void report(transport.openUrl(url), "That link could not be opened."),
+                      void report(transport.openUrl(url), {
+                          refused: "That link could not be opened.",
+                          failed: "That link could not be opened.",
+                      }),
               }
             : {}),
     });

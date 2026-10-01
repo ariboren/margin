@@ -48,6 +48,8 @@ export interface Transport {
     ): () => void;
     /** The doc itself without `link`, else a relative link from it; the daemon resolves it. */
     openFile(link?: string): Promise<OpenFileResponse>;
+    /** Shows the doc in the system file manager. */
+    revealFile(): Promise<OpenFileResponse>;
     openUrl(url: string): Promise<OpenUrlResponse>;
 }
 
@@ -88,6 +90,11 @@ export function httpTransport(docId: DocId, token: string): Transport {
             await request<OpenFileResponse>(routes.openFile(docId), {
                 method: "POST",
                 body: JSON.stringify(link === undefined ? {} : { link }),
+            }),
+        revealFile: async () =>
+            await request<OpenFileResponse>(routes.openFile(docId), {
+                method: "POST",
+                body: JSON.stringify({ reveal: true }),
             }),
         openUrl: async (url) =>
             await request<OpenUrlResponse>(routes.openUrl(docId), {

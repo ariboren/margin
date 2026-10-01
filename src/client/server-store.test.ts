@@ -55,6 +55,7 @@ function fakeTransport(initial: WireSnapshot) {
             return () => {};
         },
         openFile: async () => ({ opened: "none" }),
+        revealFile: async () => ({ opened: "none" }),
         openUrl: async () => ({ opened: "none" }),
     };
     return {

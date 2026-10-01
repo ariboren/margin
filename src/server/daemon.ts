@@ -12,7 +12,7 @@ import {
     type VerdictState,
 } from "../core/model.ts";
 import { isFile, repoRelativePath, resolveLinkedFile } from "./doc-location.ts";
-import { openFile, openableLink, type FileOpener } from "./open-file.ts";
+import { openFile, openableLink, revealFile, type FileOpener } from "./open-file.ts";
 import { openTab, type Env, type Opener } from "./open-tab.ts";
 import {
     ensureStateDir,
@@ -92,6 +92,8 @@ export interface ServerOptions {
     openUrl?: (url: string, env: Env) => Promise<Opener>;
     /** Opens a file for `open-file`; defaults to `openFile`. */
     openFile?: (path: string, env: Env) => Promise<FileOpener>;
+    /** Shows the doc in the file manager for `open-file` with `reveal`; defaults to `revealFile`. */
+    revealFile?: (path: string, env: Env) => Promise<FileOpener>;
     /** `bun run dev` only: every event stream also carries a stamp that `reload()` changes. */
     dev?: boolean;
 }
@@ -124,6 +126,7 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
     const env = options.env ?? process.env;
     const openUrl = options.openUrl ?? openTab;
     const openPath = options.openFile ?? openFile;
+    const revealPath = options.revealFile ?? revealFile;
     const startedAt = new Date().toISOString();
     const docs = new Map<DocId, Registered>();
     const opening = new Map<DocId, Promise<Registered>>();
@@ -342,7 +345,12 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
         }
         if (action === "open-file" && request.method === "POST") {
             const body = await readJson(request);
-            if (!body || (body.link !== undefined && typeof body.link !== "string")) {
+            if (
+                !body ||
+                (body.link !== undefined && typeof body.link !== "string") ||
+                (body.reveal !== undefined && typeof body.reveal !== "boolean") ||
+                (body.reveal === true && body.link !== undefined)
+            ) {
                 return error(400, "bad-request");
             }
             let path: string;
@@ -361,7 +369,9 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
                 }
                 path = linked.path;
             }
-            const opened: OpenFileResponse = { opened: await openPath(path, env) };
+            const opened: OpenFileResponse = {
+                opened: await (body.reveal === true ? revealPath : openPath)(path, env),
+            };
             return json(opened);
         }
         if (action === "open-url" && request.method === "POST") {

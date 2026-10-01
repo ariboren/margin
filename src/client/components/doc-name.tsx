@@ -13,6 +13,8 @@ export interface DocLocation {
      * tab. The daemon does this; the page never names a path.
      */
     openFile?: (link?: string) => void;
+    /** Shows the doc in the system file manager. Only a host with a daemon has it. */
+    revealFile?: () => void;
     /** Opens an http(s) link where a plain link cannot: Orca's browser blocks popups. */
     openUrl?: (url: string) => void;
     /** For a host with no daemon (the mockup): a URL for the doc's text. */
@@ -61,6 +63,15 @@ export function DocName({ location }: { location: DocLocation }): JSX.Element {
                     >
                         Open file
                     </button>
+                    {location.revealFile ? (
+                        <button
+                            type="button"
+                            class="button button-quiet"
+                            onClick={location.revealFile}
+                        >
+                            Reveal file
+                        </button>
+                    ) : null}
                     <button
                         type="button"
                         class="button button-quiet"

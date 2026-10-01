@@ -244,9 +244,11 @@ export type WireError =
 /**
  * Without `link`, the doc itself. With it, a relative link from the doc; only a file inside the
  * doc's repository (or directory) opens. The daemon never takes a path from the page.
+ * `reveal` shows the doc in the system file manager instead; it goes with no `link`.
  */
 export interface OpenFileRequest {
     link?: string;
+    reveal?: boolean;
 }
 
 export interface OpenFileResponse {

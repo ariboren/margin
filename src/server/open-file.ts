@@ -1,4 +1,5 @@
 import { dirname, extname } from "node:path";
+import { pathToFileURL } from "node:url";
 import { orcaCli, type Env } from "./open-tab.ts";
 
 export type FileOpener = "orca" | "system" | "none";
@@ -73,6 +74,82 @@ export async function openFile(path: string, env: Env): Promise<FileOpener> {
             });
             if ((await proc.exited) === 0) {
                 return opener;
+            }
+        } catch {
+            // Binary not installed; try the next.
+        }
+    }
+    return "none";
+}
+
+/** How long the file manager gets to answer over D-Bus before the folder is opened instead. */
+const SHOW_ITEMS_REPLY_MS = 2_000;
+
+export interface RevealCommand {
+    argv: string[];
+    /** Kills a command that outlives it, so a silent bus cannot hold the request. */
+    timeoutMs?: number;
+}
+
+/**
+ * Commands to try in order for showing a file in the system file manager; never Orca, whose
+ * editor is what "open" is for. Finder selects the file. On Linux the freedesktop `ShowItems`
+ * call selects it where a file manager answers, and the folder opens otherwise.
+ */
+export function revealCommands(
+    path: string,
+    platform: NodeJS.Platform = process.platform,
+): RevealCommand[] {
+    if (platform === "darwin") {
+        return [{ argv: ["open", "-R", path] }];
+    }
+    // dbus-send splits an array argument on commas, so one in the path must not stay literal.
+    const uri = pathToFileURL(path).href.replaceAll(",", "%2C");
+    return [
+        {
+            argv: [
+                "dbus-send",
+                "--session",
+                // Without a reply dbus-send exits 0 even when no file manager is listening.
+                "--print-reply",
+                `--reply-timeout=${SHOW_ITEMS_REPLY_MS}`,
+                "--dest=org.freedesktop.FileManager1",
+                "/org/freedesktop/FileManager1",
+                "org.freedesktop.FileManager1.ShowItems",
+                `array:string:${uri}`,
+                "string:",
+            ],
+            timeoutMs: SHOW_ITEMS_REPLY_MS + 1_000,
+        },
+        { argv: ["xdg-open", dirname(path)] },
+    ];
+}
+
+/** Runs one command and resolves with its exit code; rejects if the binary is missing. */
+export type RevealRun = (command: RevealCommand, env: Env) => Promise<number>;
+
+async function spawnReveal({ argv, timeoutMs }: RevealCommand, env: Env): Promise<number> {
+    const proc = Bun.spawn(argv, {
+        env,
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+        ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
+    });
+    return await proc.exited;
+}
+
+/** Spawns argv arrays only, like `openFile`. A failed, timed out or missing command tries the next. */
+export async function revealFile(
+    path: string,
+    env: Env,
+    run: RevealRun = spawnReveal,
+    platform: NodeJS.Platform = process.platform,
+): Promise<FileOpener> {
+    for (const command of revealCommands(path, platform)) {
+        try {
+            if ((await run(command, env)) === 0) {
+                return "system";
             }
         } catch {
             // Binary not installed; try the next.
