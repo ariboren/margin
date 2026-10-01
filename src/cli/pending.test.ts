@@ -357,6 +357,78 @@ describe("review header", () => {
     });
 });
 
+describe("a declined doc", () => {
+    const decline = { type: "verdict", by: "user", state: "declined", hash: "h" } as const;
+    const reopen = { type: "verdict", by: "user", state: "open", hash: "h" } as const;
+
+    test("shows its waiting threads and edits but claims nothing; the first read after a reopen claims them once", async () => {
+        const taken = await box.comment("cold path", "Why?");
+        await read();
+        await box.comment("Retry queue", "Which queue?");
+        await userEdit("rarely runs", "never runs");
+        await box.append(decline);
+
+        const first = await readText();
+        expect(first).toStartWith("declined\nc1 working L5 Findings\n");
+        expect(first).toContain("c2 open L");
+        expect(first).toContain("  user: Which queue?");
+        expect(first).toContain("edit L5 Findings");
+        // The edit rode along with that read; the unclaimed thread prints in full again.
+        const second = await readText();
+        expect(second).toContain("  user: Which queue?");
+        expect(second).not.toContain("edit L");
+
+        let log = await events();
+        expect(log.filter((event) => event.type === "claim")).toHaveLength(1);
+        expect(log.at(-1)).toMatchObject({ type: "cursor", stream: "pending", ids: ["c1", "c2"] });
+        let state = await box.state();
+        expect(state.threads.get("c2")).toMatchObject({ state: "open", claimed: false });
+        expect(state.threads.get(taken)!.state).toBe("working");
+
+        await box.append(reopen);
+        const after = await read();
+        expect(after.review).toEqual({ reopened: true });
+        expect(after.edits).toEqual([]);
+        expect(after.threads.map((thread) => [thread.id, thread.messages])).toEqual([
+            ["c1", [{ by: "user", text: "Why?" }]],
+            ["c2", [{ by: "user", text: "Which queue?" }]],
+        ]);
+        log = await events();
+        expect(log.filter((event) => event.type === "claim").map((event) => event.ids)).toEqual([
+            ["c1"],
+            ["c2"],
+        ]);
+        state = await box.state();
+        expect(state.threads.get("c2")).toMatchObject({ state: "working", claimed: true });
+
+        const settled = await events();
+        expect(await read()).toMatchObject({ edits: [] });
+        expect(await events()).toHaveLength(settled.length);
+    });
+
+    test("--wait reads it the same way, and blocks again until the reopen", async () => {
+        await box.comment("cold path", "Why?");
+        await box.append(decline);
+        let out = "";
+        await pendingWait(box.doc, { debounceMs: 0, write: (text) => (out += text) });
+        expect(out).toStartWith("declined\nc1 open L5 Findings\n");
+        expect((await events()).some((event) => event.type === "claim")).toBe(false);
+        expect((await box.state()).threads.get("c1")!.state).toBe("open");
+
+        out = "";
+        const waiting = pendingWait(box.doc, { debounceMs: 0, write: (text) => (out += text) });
+        await Bun.sleep(400);
+        expect(out).toBe("");
+        await box.append(reopen);
+        expect(await waiting).toBe(true);
+        expect(out).toStartWith("reopened\nc1 open L5 Findings\n");
+        expect((await box.state()).threads.get("c1")).toMatchObject({
+            state: "working",
+            claimed: true,
+        });
+    });
+});
+
 describe("pending --wait", () => {
     test("a verdict and a finish each unblock it", async () => {
         const id = await box.comment("cold path", "A");

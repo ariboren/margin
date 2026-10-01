@@ -1,5 +1,6 @@
 // `margin pending`: threads waiting on the agent plus user edits since its last read. It claims
-// what it returns and moves the pending cursor, so edits ride along exactly once.
+// what it returns, except on a declined doc, and moves the pending cursor, so edits ride along
+// exactly once.
 import { hashText, unitAt } from "../core/blocks.ts";
 import { docTitle } from "../core/context.ts";
 import { netEdits, pendingEdit } from "../core/diff.ts";
@@ -129,9 +130,14 @@ export async function pending(docPath: string, options: PendingOptions): Promise
         const view = viewOf(docPath, txn.events);
         const result = buildPending(view);
         const inputs: EventInput[] = [];
+        // A declined doc tells the agent to stop, so its threads are shown and left unclaimed: the
+        // page must not show them as worked on. The cursor still moves, or `--wait` would return
+        // at once forever; the edits rode along with this read, and the threads, never claimed,
+        // print in full again and are claimed by the first read after a reopen.
+        const declined = view.state.verdict?.state === "declined";
         const claims = result.threads
             .map((t) => view.state.threads.get(t.id)!)
-            .filter((thread) => !thread.claimed || thread.state === "open")
+            .filter((thread) => !declined && (!thread.claimed || thread.state === "open"))
             .map((thread) => thread.id);
         if (claims.length > 0) inputs.push({ type: "claim", ...by, ids: claims });
         // The agent's own bookkeeping does not move the cursor, or every read would append one.
