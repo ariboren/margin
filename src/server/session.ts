@@ -622,8 +622,11 @@ export class DocSession {
      * Accepts the pending agent suggestions in the order they were made, each against the source
      * the one before it left: after every accept the log and the file are folded back in, so an
      * anchor a previous accept moved or swallowed is seen as it now is. One that no longer applies
-     * logs nothing and stays pending. No `send` for the drafts: the finish event names them and
-     * its fold opens them, so the agent hears of each thread once.
+     * logs nothing and stays pending. Stricter than a click on accept: nobody looks at each one
+     * here, so a suggestion whose quote changed since the request began (an earlier accept
+     * rewrote part of it) is not applied over that text either; only a quote that merely moved
+     * is. No `send` for the drafts: the finish event names them and its fold opens them, so the
+     * agent hears of each thread once.
      */
     async requestFinish(): Promise<Versioned<FinishResult & Partial<Seq>>> {
         return await this.mutate((txn): FinishResult & Partial<Seq> => {
@@ -636,10 +639,11 @@ export class DocSession {
                         suggestion?.by === "agent" && suggestion.status === "pending",
                 )
                 .sort((a, b) => a.suggestion!.seq - b.suggestion!.seq)
-                .map((thread) => thread.id);
+                .map((thread) => ({ id: thread.id, quote: thread.anchor?.exact }));
             const unapplied: ThreadId[] = [];
-            for (const id of suggested) {
-                if (this.acceptIn(txn, this.thread(id)).ok) {
+            for (const { id, quote } of suggested) {
+                const thread = this.thread(id);
+                if (thread.anchor?.exact === quote && this.acceptIn(txn, thread).ok) {
                     this.reconcile(txn);
                 } else {
                     unapplied.push(id);

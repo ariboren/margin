@@ -1818,20 +1818,34 @@ describe("verdict and finish", () => {
         expect(session.snapshot().finish).toMatchObject({ seq: finished.seq!, ids: [second] });
     });
 
-    test("a partly overlapping suggestion lands where its anchor moved, as two clicks on accept would", async () => {
+    test("finish does not apply a suggestion over text an earlier accept rewrote, though two clicks would", async () => {
         const clicked = await setup();
         const one = await clicked.agentSuggest("quick brown", "slow");
         const two = await clicked.agentSuggest("brown fox", "red fox");
         await clicked.session.accept(one);
-        await clicked.session.accept(two);
-        const byHand = read(clicked.path);
+        expect(clicked.thread(two).anchor!.exact).toBe("slow fox");
+        expect(await clicked.session.accept(two)).toMatchObject({ ok: true });
+        expect(read(clicked.path)).toBe(DOC.replace("quick brown fox", "red fox"));
+        rmSync(join(dir, ".margin"), { recursive: true });
 
+        const { path, session, agentSuggest, thread, logged } = await setup();
+        const first = await agentSuggest("quick brown", "slow");
+        const second = await agentSuggest("brown fox", "red fox");
+        const finished = await session.requestFinish();
+        expect(finished).toMatchObject({ ids: [second], unapplied: [second] });
+        expect(read(path)).toBe(DOC.replace("quick brown", "slow"));
+        expect(thread(first).state).toBe("resolved");
+        expect(thread(second)).toMatchObject({ state: "open", suggestion: { status: "pending" } });
+        expect(await logged("edit")).toHaveLength(1);
+    });
+
+    test("finish does not apply a suggestion whose quote an earlier accept edited inside", async () => {
         const { path, session, agentSuggest } = await setup();
-        await agentSuggest("quick brown", "slow");
-        await agentSuggest("brown fox", "red fox");
-        expect(await session.requestFinish()).toMatchObject({ ids: [], unapplied: [] });
-        expect(read(path)).toBe(byHand);
-        expect(session.snapshot().hash).toBe(hashText(byHand));
+        const inner = await agentSuggest("brown", "red");
+        const outer = await agentSuggest("quick brown fox", "cat");
+        expect(await session.requestFinish()).toMatchObject({ ids: [outer], unapplied: [outer] });
+        expect(read(path)).toBe(DOC.replace("brown", "red"));
+        expect(session.snapshot().threads.find((t) => t.id === inner)!.state).toBe("resolved");
     });
 
     test("a suggestion whose text is gone is left pending and the file untouched", async () => {
