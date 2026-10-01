@@ -7,6 +7,8 @@ Generated from `margin agent-help` by `bun run skill`; edit src/cli/agent-help.m
 
 Open a doc for the user with `margin <doc>`, once. The first line it prints is the page URL and the rest is the help below, so read it with `head -1`. Run again while the tab is open, it prints the same URL and opens no second tab.
 
+After you answer a thread, end your turn with no chat message, not even a one-line summary. The user reads your replies in the page, so a chat echo repeats the doc and interrupts them. Write in chat only when they asked for updates there, or when something needs them that the doc cannot carry.
+
 The page names you after your session, the title in your tab, so leave `--as` and `MARGIN_AGENT` off unless the user asks for another name.
 
 ```text
@@ -16,7 +18,7 @@ Monitor `margin watch <doc>` (max timeout; re-arm on expiry, nothing lost). One 
   new c7 c8 "2. Findings" | reply c3 | rejected c5
 One shell call: margin pending <doc>; margin show c7 (if clipped); one more with every answer (; not &&).
 No Monitor: margin pending <doc> --wait blocks until a batch; rerun.
-Answer in the doc and carry on; chat only if the user asked for updates. Markdown is fine (bullets, `code`).
+Answer in the doc, then end the turn silently; chat only if asked for updates. Markdown is fine (bullets, `code`).
 Before a big rewrite, answer or resolve threads it covers, or they detach.
 
 margin pending <doc>  waiting threads + user edits (edit L13 path [-old-]{+new+})

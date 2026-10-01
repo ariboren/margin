@@ -22,6 +22,9 @@ const generated =
 const opening =
     "Open a doc for the user with `margin <doc>`, once. The first line it prints is the page URL and the rest is the help below, so read it with `head -1`. Run again while the tab is open, it prints the same URL and opens no second tab.";
 
+const silence =
+    "After you answer a thread, end your turn with no chat message, not even a one-line summary. The user reads your replies in the page, so a chat echo repeats the doc and interrupts them. Write in chat only when they asked for updates there, or when something needs them that the doc cannot carry.";
+
 const naming =
     "The page names you after your session, the title in your tab, so leave `--as` and `MARGIN_AGENT` off unless the user asks for another name.";
 
@@ -41,6 +44,8 @@ export function render(help: string): Record<Output, string> {
             "",
             opening,
             "",
+            silence,
+            "",
             naming,
             "",
             fenced(help),
@@ -51,6 +56,8 @@ export function render(help: string): Record<Output, string> {
             generated,
             "",
             opening,
+            "",
+            silence,
             "",
             naming,
             "",

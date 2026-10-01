@@ -71,7 +71,7 @@ Tell the agent the doc is open in margin. Select a sentence, press `c`, type a q
 
 ## Connecting an agent
 
-The agent works through the `margin` CLI and nothing else. It never reads the sidecar and never rewrites the whole file. `margin agent-help` prints the complete instructions in 1,488 bytes; the Claude Code skill and the AGENTS.md snippet are generated from that text. They tell the agent to answer in the doc, as replies and suggestions, and to post in chat only when you've asked for updates.
+The agent works through the `margin` CLI and nothing else. It never reads the sidecar and never rewrites the whole file. `margin agent-help` prints the complete instructions in 1,494 bytes; the Claude Code skill and the AGENTS.md snippet are generated from that text. They tell the agent to answer in the doc, as replies and suggestions, and to post in chat only when you've asked for updates.
 
 **Claude Code.** `margin setup` asks where to install the skill (this project, all your projects, or not at all) and asks before overwriting a skill that differs from this version's. Run it again after upgrading margin. `--user` and `--force` answer those questions up front, and when it isn't run from a terminal (by an agent or a script) it never asks: it installs in the current project and refuses to overwrite a changed skill without `--force`.
 

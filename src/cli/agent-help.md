@@ -4,7 +4,7 @@ Monitor `margin watch <doc>` (max timeout; re-arm on expiry, nothing lost). One 
   new c7 c8 "2. Findings" | reply c3 | rejected c5
 One shell call: margin pending <doc>; margin show c7 (if clipped); one more with every answer (; not &&).
 No Monitor: margin pending <doc> --wait blocks until a batch; rerun.
-Answer in the doc and carry on; chat only if the user asked for updates. Markdown is fine (bullets, `code`).
+Answer in the doc, then end the turn silently; chat only if asked for updates. Markdown is fine (bullets, `code`).
 Before a big rewrite, answer or resolve threads it covers, or they detach.
 
 margin pending <doc>  waiting threads + user edits (edit L13 path [-old-]{+new+})
