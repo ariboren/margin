@@ -4,7 +4,7 @@ import { basename, dirname, join } from "node:path";
 import type { Server } from "bun";
 import { sidecar } from "../core/log.ts";
 import { LockTimeoutError } from "../core/lock.ts";
-import type { Anchor, DocSettingKey, ThreadId } from "../core/model.ts";
+import type { Anchor, DocSettingKey, ThreadId, VerdictState } from "../core/model.ts";
 import { isFile, repoRelativePath, resolveLinkedFile } from "./doc-location.ts";
 import { openFile, openableLink, type FileOpener } from "./open-file.ts";
 import { openTab, type Env, type Opener } from "./open-tab.ts";
@@ -498,8 +498,13 @@ async function mutate(
         case "setting":
             return await session.setSetting(settingKey(body.key), flag(body.value));
         case "verdict":
+            return await session.setVerdict({
+                state: verdictState(body.state),
+                ...(body.note === undefined ? {} : { note: text(body.note) }),
+                ...(body.asIs === undefined ? {} : { asIs: flag(body.asIs) }),
+            });
         case "finish":
-            throw new WireFailure(404, "not-found");
+            return await session.requestFinish();
     }
 }
 
@@ -538,6 +543,13 @@ function threadId(value: unknown): ThreadId {
 function settingKey(value: unknown): DocSettingKey {
     if (value !== "autoApply") {
         throw badRequest("unknown setting");
+    }
+    return value;
+}
+
+function verdictState(value: unknown): VerdictState {
+    if (value !== "open" && value !== "approved" && value !== "dropped") {
+        throw badRequest("unknown verdict state");
     }
     return value;
 }

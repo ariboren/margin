@@ -436,3 +436,84 @@ describe("idle exit", () => {
         }
     });
 });
+
+describe("verdict and finish routes", () => {
+    const post = async (docId: string, action: "verdict" | "finish" | "comment", body: unknown) =>
+        await fetch(`${server.origin}${routes.mutate(docId, action)}`, {
+            method: "POST",
+            headers: { authorization: `Bearer ${server.token}`, origin: server.origin },
+            body: JSON.stringify(body),
+        });
+
+    async function register(name: string): Promise<string> {
+        writeFileSync(docPath(name), "# Plan\n\nOne step.\n");
+        return (await server.register(docPath(name))).docId;
+    }
+
+    test("a refusal is a 200 naming the threads; as is, the verdict lands in the snapshot", async () => {
+        const docId = await register("verdict.md");
+        const { id } = (await (await post(docId, "comment", { text: "A note" })).json()) as {
+            id: string;
+        };
+
+        const refused = await post(docId, "verdict", { state: "approved" });
+        expect(refused.status).toBe(200);
+        expect(await refused.json()).toEqual({
+            ok: false,
+            reason: "unresolved",
+            ids: [id],
+            version: 1,
+        });
+
+        const approved = await post(docId, "verdict", {
+            state: "approved",
+            asIs: true,
+            note: " Go\nahead ",
+        });
+        expect(approved.status).toBe(200);
+        expect(await approved.json()).toEqual({ ok: true, seq: 2, version: 2 });
+        const snapshot = server.session(docId)!.snapshot();
+        expect(snapshot.verdict).toMatchObject({
+            state: "approved",
+            seq: 2,
+            hash: snapshot.hash,
+            note: "Go ahead",
+            closed: [id],
+        });
+
+        const reopened = await post(docId, "verdict", { state: "open" });
+        expect(await reopened.json()).toEqual({ ok: true, seq: 3, version: 3 });
+        const again = await post(docId, "verdict", { state: "open" });
+        expect(await again.json()).toEqual({ ok: true, version: 3 });
+    });
+
+    test("a malformed verdict is a bad request and logs nothing", async () => {
+        const docId = await register("verdict-bad.md");
+        for (const body of [
+            {},
+            { state: "done" },
+            { state: "dropped", note: 3 },
+            { state: "dropped", note: "x".repeat(201) },
+            { state: "approved", asIs: "yes" },
+        ]) {
+            const response = await post(docId, "verdict", body);
+            expect({ body, status: response.status }).toEqual({ body, status: 400 });
+            expect(await response.json()).toMatchObject({ error: "bad-request" });
+        }
+        expect(server.session(docId)!.version).toBe(0);
+    });
+
+    test("finish answers with the ids handed over and the event's seq, or neither", async () => {
+        const docId = await register("finish.md");
+        const empty = await post(docId, "finish", {});
+        expect(empty.status).toBe(200);
+        expect(await empty.json()).toEqual({ ids: [], unapplied: [], version: 0 });
+
+        const { id } = (await (await post(docId, "comment", { text: "A note" })).json()) as {
+            id: string;
+        };
+        const finished = await post(docId, "finish", {});
+        expect(await finished.json()).toEqual({ ids: [id], unapplied: [], seq: 2, version: 2 });
+        expect(server.session(docId)!.snapshot().finish).toMatchObject({ seq: 2, ids: [id] });
+    });
+});

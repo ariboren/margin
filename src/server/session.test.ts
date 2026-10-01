@@ -19,7 +19,8 @@ import { emitWatch, WakeTail } from "../cli/watch.ts";
 import { threadStatus } from "../client/view-model.ts";
 import type { Anchor, Event, EventInput, SaveResult, ThreadId } from "../core/model.ts";
 import { startServer, type MarginServer } from "./daemon.ts";
-import { DocSession, mapStart, mapStartStrict } from "./session.ts";
+import { nextThreadId } from "../core/threads.ts";
+import { DocSession, MAX_VERDICT_NOTE, mapStart, mapStartStrict } from "./session.ts";
 import { routes, shortDocId, type MutationName, type WireSnapshot } from "./protocol.ts";
 
 const PUBLIC_SAMPLE = join(import.meta.dir, "..", "..", "fixtures", "public-sample.md");
@@ -1475,5 +1476,420 @@ describe("retract", () => {
             body: JSON.stringify({ id, seq: "2" }),
         });
         expect(bad.status).toBe(400);
+    });
+});
+
+describe("verdict and finish", () => {
+    const DOC = "# Title\n\nThe quick brown fox jumps over the lazy dog.\n\nA second paragraph.\n";
+
+    async function setup(source = DOC) {
+        const path = join(dir, "doc.md");
+        writeFileSync(path, source);
+        const session = await DocSession.open("0123456789ab", path);
+        const anchor = (exact: string): Anchor => {
+            const start = read(path).indexOf(exact);
+            return createAnchor(read(path), { start, end: start + exact.length });
+        };
+        const agent = async (...inputs: EventInput[]) => {
+            await appendEvents(path, inputs);
+            await session.sync();
+        };
+        /** `margin suggest --find`: a thread the agent opens with a pending suggestion. */
+        const agentSuggest = async (exact: string, replace: string): Promise<ThreadId> => {
+            const id = nextThreadId(await events(path));
+            await agent({
+                type: "suggest",
+                by: "agent",
+                id,
+                anchor: anchor(exact),
+                replace,
+                apply: false,
+            });
+            return id;
+        };
+        const thread = (id: ThreadId) => session.snapshot().threads.find((t) => t.id === id)!;
+        const logged = async (type: Event["type"]) =>
+            (await events(path)).filter((event) => event.type === type);
+        return { path, session, anchor, agent, agentSuggest, thread, logged };
+    }
+
+    test("an approval is refused with the ids of every unresolved thread, and logs nothing", async () => {
+        const { session, anchor, agent, logged } = await setup();
+        const open = await session.comment({ anchor: anchor("quick"), text: "Why?" });
+        const replied = await session.comment({ anchor: anchor("lazy"), text: "Sure?" });
+        await agent({ type: "reply", by: "agent", id: replied.id, text: "Yes." });
+        const done = await session.comment({ anchor: anchor("second"), text: "Fine" });
+        await session.resolve(done.id);
+        const gone = await session.comment({ text: "A doc note" });
+        await session.deleteThread(gone.id);
+        await session.setHold(true);
+        const draft = await session.comment({ anchor: anchor("Title"), text: "Held" });
+
+        const refused = await session.setVerdict({ state: "approved" });
+        expect(refused).toEqual({
+            ok: false,
+            reason: "unresolved",
+            ids: [open.id, replied.id, draft.id],
+            version: session.version,
+        });
+        expect(await logged("verdict")).toEqual([]);
+        expect(session.snapshot().verdict).toBeUndefined();
+    });
+
+    test("an approval with nothing unresolved records the hash of the file under the lock", async () => {
+        const { path, session, anchor, logged } = await setup();
+        const { id } = await session.comment({ anchor: anchor("quick"), text: "Why?" });
+        await session.resolve(id);
+        // Not synced: the verdict's own reconcile must be what reads these bytes.
+        editorWrite(path, DOC.replace("second", "third"));
+
+        const approved = await session.setVerdict({ state: "approved" });
+        expect(approved).toMatchObject({ ok: true, seq: session.version });
+        const [event] = await logged("verdict");
+        expect(event).toMatchObject({
+            by: "user",
+            state: "approved",
+            hash: hashText(read(path)),
+            seq: approved.seq,
+        });
+        expect(event).not.toHaveProperty("closed");
+        expect(event).not.toHaveProperty("note");
+        expect(session.snapshot().verdict).toEqual({
+            state: "approved",
+            seq: approved.seq!,
+            at: event!.at,
+            hash: session.snapshot().hash,
+        });
+    });
+
+    test("the verdict's hash is of the decoded file, BOM and CRLF kept", async () => {
+        const source = "\uFEFF# Title\r\n\r\nThe quick brown fox.\r\n";
+        const { path, session, logged } = await setup(source);
+        await session.setVerdict({ state: "approved" });
+        const decoded = decodeSource(readFileSync(path));
+        expect(decoded).toBe(source);
+        expect(decoded.charCodeAt(0)).toBe(0xfeff);
+        expect(await logged("verdict")).toMatchObject([{ hash: hashText(decoded) }]);
+        expect(session.snapshot().verdict!.hash).toBe(hashText(decoded));
+    });
+
+    test("a thread another writer logged a moment before the request still refuses it", async () => {
+        const { path, session, anchor } = await setup();
+        await appendEvents(path, [
+            {
+                type: "comment",
+                by: "user",
+                id: "c1",
+                anchor: anchor("quick"),
+                text: "Wait",
+                draft: false,
+            },
+        ]);
+        expect(session.snapshot().threads).toEqual([]);
+        expect(await session.setVerdict({ state: "approved" })).toMatchObject({
+            ok: false,
+            ids: ["c1"],
+        });
+    });
+
+    test("approve as is closes the open threads in one verdict event and applies no suggestion", async () => {
+        const { path, session, anchor, agentSuggest, thread } = await setup();
+        const open = await session.comment({ anchor: anchor("lazy"), text: "Sure?" });
+        const suggested = await agentSuggest("quick", "slow");
+        const done = await session.comment({ anchor: anchor("second"), text: "Fine" });
+        await session.resolve(done.id);
+        const before = (await events(path)).length;
+
+        const approved = await session.setVerdict({ state: "approved", asIs: true });
+        expect(approved.ok).toBe(true);
+        const after = await events(path);
+        expect(after.slice(before)).toMatchObject([
+            {
+                type: "verdict",
+                state: "approved",
+                closed: [open.id, suggested],
+                hash: hashText(DOC),
+            },
+        ]);
+        expect(read(path)).toBe(DOC);
+        expect(thread(open.id).state).toBe("resolved");
+        expect(thread(suggested)).toMatchObject({
+            state: "resolved",
+            suggestion: { status: "rejected" },
+        });
+        expect(session.snapshot().verdict).toMatchObject({
+            state: "approved",
+            closed: [open.id, suggested],
+        });
+        expect(await session.setVerdict({ state: "approved" })).toMatchObject({ ok: true });
+    });
+
+    test("a drop leaves the open threads alone, and as-is means nothing on it", async () => {
+        const { session, anchor, thread, logged } = await setup();
+        const { id } = await session.comment({ anchor: anchor("quick"), text: "Why?" });
+        const dropped = await session.setVerdict({ state: "dropped", asIs: true });
+        expect(dropped).toMatchObject({ ok: true, seq: 2 });
+        expect(thread(id).state).toBe("open");
+        expect(session.snapshot().verdict).toMatchObject({ state: "dropped", seq: 2 });
+        expect((await logged("verdict"))[0]).not.toHaveProperty("closed");
+    });
+
+    test("a reopen of an open doc logs nothing; of a dropped one, a verdict", async () => {
+        const { session, logged } = await setup();
+        const noop = await session.setVerdict({ state: "open" });
+        expect(noop).toEqual({ ok: true, version: 0 });
+        expect(await logged("verdict")).toEqual([]);
+
+        await session.setVerdict({ state: "dropped" });
+        const reopened = await session.setVerdict({ state: "open" });
+        expect(reopened).toMatchObject({ ok: true, seq: 2 });
+        expect(session.snapshot().verdict).toMatchObject({ state: "open", seq: 2 });
+        expect(await session.setVerdict({ state: "open" })).toEqual({ ok: true, version: 2 });
+        expect(await logged("verdict")).toHaveLength(2);
+    });
+
+    test("the user's own comment reopens an approved doc with no verdict event", async () => {
+        const { session, anchor, logged } = await setup();
+        await session.setVerdict({ state: "approved" });
+        const { version } = await session.comment({ anchor: anchor("quick"), text: "One more" });
+        expect(session.snapshot().verdict).toEqual({
+            state: "open",
+            seq: version,
+            at: expect.any(String),
+        });
+        expect(await logged("verdict")).toHaveLength(1);
+    });
+
+    test("an edit after the approval keeps the verdict; its hash no longer matches the doc", async () => {
+        const { path, session } = await setup();
+        await session.setVerdict({ state: "approved" });
+        expect(session.snapshot().verdict!.hash).toBe(session.snapshot().hash);
+
+        editorWrite(path, DOC.replace("second", "third"));
+        await session.sync();
+        const afterUser = session.snapshot();
+        expect(afterUser.verdict).toMatchObject({ state: "approved", hash: hashText(DOC) });
+        expect(afterUser.hash).toBe(hashText(read(path)));
+        expect(afterUser.hash).not.toBe(afterUser.verdict!.hash);
+
+        const edited = await applyEdit(path, {
+            start: read(path).indexOf("quick"),
+            before: "quick",
+            after: "slow",
+            cause: "apply",
+            by: "agent",
+        });
+        expect(edited.ok).toBe(true);
+        await session.sync();
+        expect(session.snapshot().verdict).toMatchObject({
+            state: "approved",
+            hash: hashText(DOC),
+        });
+    });
+
+    test("nothing the agent logs gives, changes or clears a verdict", async () => {
+        const { session, anchor, agent, agentSuggest, logged } = await setup();
+        const { id } = await session.comment({ anchor: anchor("quick"), text: "Why?" });
+        await agent(
+            { type: "reply", by: "agent", id, text: "Because." },
+            { type: "resolve", by: "agent", id },
+        );
+        // Every thread is resolved, by the agent: the doc is still not approved.
+        expect(session.snapshot().verdict).toBeUndefined();
+
+        const approved = await session.setVerdict({ state: "approved" });
+        await agent({ type: "reply", by: "agent", id, text: "One more thing." });
+        await agentSuggest("lazy", "sleepy");
+        expect(session.snapshot().verdict).toMatchObject({ state: "approved", seq: approved.seq });
+        expect(await logged("verdict")).toHaveLength(1);
+        expect(await logged("finish")).toEqual([]);
+    });
+
+    test("the note is one trimmed line, left out when empty, and refused past the cap", async () => {
+        const { session, logged } = await setup();
+        await session.setVerdict({ state: "dropped", note: "  Not now.\r\n\n  Maybe later. " });
+        expect(session.snapshot().verdict!.note).toBe("Not now. Maybe later.");
+        await session.setVerdict({ state: "dropped", note: " \n " });
+        expect(session.snapshot().verdict).not.toHaveProperty("note");
+        await session.setVerdict({ state: "dropped", note: "x".repeat(MAX_VERDICT_NOTE) });
+        expect(session.snapshot().verdict!.note).toHaveLength(MAX_VERDICT_NOTE);
+
+        const tooLong = session.setVerdict({
+            state: "dropped",
+            note: "x".repeat(MAX_VERDICT_NOTE + 1),
+        });
+        await expect(tooLong).rejects.toMatchObject({ status: 400, error: "bad-request" });
+        expect(await logged("verdict")).toHaveLength(3);
+    });
+
+    test("with the file gone, neither a verdict nor a finish is logged", async () => {
+        const { path, session, anchor } = await setup();
+        await session.comment({ anchor: anchor("quick"), text: "Why?" });
+        rmSync(path);
+        const count = (await events(path)).length;
+        const gone = { status: 409, error: "missing" };
+        await expect(session.setVerdict({ state: "dropped" })).rejects.toMatchObject(gone);
+        await expect(session.setVerdict({ state: "open" })).rejects.toMatchObject(gone);
+        await expect(session.requestFinish()).rejects.toMatchObject(gone);
+        await session.sync();
+        expect((await events(path)).length).toBe(count);
+
+        rmSync(dir, { recursive: true });
+        await expect(session.requestFinish()).rejects.toMatchObject(gone);
+        await expect(session.setVerdict({ state: "dropped" })).rejects.toMatchObject(gone);
+    });
+
+    test("finish with nothing unresolved logs nothing", async () => {
+        const { path, session, anchor } = await setup();
+        const { id } = await session.comment({ anchor: anchor("quick"), text: "Why?" });
+        await session.resolve(id);
+        const count = (await events(path)).length;
+        expect(await session.requestFinish()).toEqual({ ids: [], unapplied: [], version: 2 });
+        expect((await events(path)).length).toBe(count);
+        expect(session.snapshot().finish).toBeUndefined();
+    });
+
+    test("finish accepts the one pending agent suggestion as a click would, and wakes nobody", async () => {
+        const { path, session, agentSuggest, thread } = await setup();
+        const id = await agentSuggest("quick", "slow");
+        const before = (await events(path)).length;
+        await emitWatch(path, () => undefined);
+
+        const finished = await session.requestFinish();
+        expect(finished).toEqual({ ids: [], unapplied: [], version: session.version });
+        expect(read(path)).toBe(DOC.replace("quick", "slow"));
+        expect(thread(id)).toMatchObject({ state: "resolved", suggestion: { status: "accepted" } });
+        const added = (await events(path)).slice(before).filter((event) => event.type !== "cursor");
+        expect(added).toMatchObject([
+            { type: "edit", by: "user", cause: "accept", id, before: "quick", after: "slow" },
+            { type: "accept", by: "user", id },
+        ]);
+        expect(session.snapshot().hash).toBe(hashText(read(path)));
+
+        const printed: string[] = [];
+        expect(await emitWatch(path, (text) => printed.push(text))).toBe(false);
+        expect(printed).toEqual([]);
+        expect(await session.setVerdict({ state: "approved" })).toMatchObject({ ok: true });
+    });
+
+    test("finish applies suggestions in the order they were made, each on the source the last one left", async () => {
+        const { path, session, anchor, agent, agentSuggest, logged } = await setup();
+        const older = await session.comment({ anchor: anchor("quick brown"), text: "Shorter?" });
+        const later = await agentSuggest("lazy", "sleepy");
+        const last = await agentSuggest("second", "2nd");
+        // The oldest thread gets the newest suggestion: it goes last, behind the two it shifts.
+        await agent({
+            type: "suggest",
+            by: "agent",
+            id: older.id,
+            replace: "very quick and very brown",
+            apply: false,
+        });
+
+        const finished = await session.requestFinish();
+        expect(finished).toMatchObject({ ids: [], unapplied: [] });
+        expect(read(path)).toBe(
+            "# Title\n\nThe very quick and very brown fox jumps over the sleepy dog.\n\nA 2nd paragraph.\n",
+        );
+        expect((await logged("accept")).map((event) => "id" in event && event.id)).toEqual([
+            later,
+            last,
+            older.id,
+        ]);
+        expect(await logged("outside")).toEqual([]);
+        expect(await logged("finish")).toEqual([]);
+    });
+
+    test("a suggestion an earlier accept swallowed stays pending and is handed over", async () => {
+        const { path, session, agentSuggest, thread, logged } = await setup();
+        const first = await agentSuggest("quick brown fox", "cat");
+        const second = await agentSuggest("brown", "red");
+
+        const finished = await session.requestFinish();
+        expect(finished).toMatchObject({ ids: [second], unapplied: [second] });
+        expect(read(path)).toBe(DOC.replace("quick brown fox", "cat"));
+        expect(thread(first)).toMatchObject({ state: "resolved" });
+        expect(thread(second)).toMatchObject({ state: "open", suggestion: { status: "pending" } });
+        expect(await logged("accept")).toHaveLength(1);
+        expect(await logged("edit")).toHaveLength(1);
+        expect(await logged("finish")).toMatchObject([
+            { by: "user", ids: [second], seq: finished.seq },
+        ]);
+        expect(session.snapshot().finish).toMatchObject({ seq: finished.seq!, ids: [second] });
+    });
+
+    test("a partly overlapping suggestion lands where its anchor moved, as two clicks on accept would", async () => {
+        const clicked = await setup();
+        const one = await clicked.agentSuggest("quick brown", "slow");
+        const two = await clicked.agentSuggest("brown fox", "red fox");
+        await clicked.session.accept(one);
+        await clicked.session.accept(two);
+        const byHand = read(clicked.path);
+
+        const { path, session, agentSuggest } = await setup();
+        await agentSuggest("quick brown", "slow");
+        await agentSuggest("brown fox", "red fox");
+        expect(await session.requestFinish()).toMatchObject({ ids: [], unapplied: [] });
+        expect(read(path)).toBe(byHand);
+        expect(session.snapshot().hash).toBe(hashText(byHand));
+    });
+
+    test("a suggestion whose text is gone is left pending and the file untouched", async () => {
+        const { path, session, agentSuggest, thread } = await setup();
+        const id = await agentSuggest("quick brown fox", "cat");
+        const edited = DOC.replace("The quick brown fox jumps", "Something else leaps");
+        editorWrite(path, edited);
+        await session.sync();
+
+        const finished = await session.requestFinish();
+        expect(finished).toMatchObject({ ids: [id], unapplied: [id] });
+        expect(read(path)).toBe(edited);
+        expect(thread(id)).toMatchObject({ state: "open", suggestion: { status: "pending" } });
+    });
+
+    test("finish hands over held drafts and the user's own suggestion in one event, with no send", async () => {
+        const { path, session, anchor, thread, logged } = await setup();
+        const open = await session.comment({ anchor: anchor("lazy"), text: "Sure?" });
+        await session.setHold(true);
+        const draft = await session.comment({ anchor: anchor("quick"), text: "Held" });
+        const own = await session.suggest({ anchor: anchor("second"), replace: "2nd" });
+        expect(thread(draft.id).state).toBe("draft");
+
+        const finished = await session.requestFinish();
+        expect(finished).toMatchObject({ ids: [open.id, draft.id, own.id], unapplied: [] });
+        expect(read(path)).toBe(DOC);
+        expect(thread(draft.id).state).toBe("open");
+        expect(thread(own.id)).toMatchObject({ state: "open", suggestion: { status: "pending" } });
+        expect(await logged("send")).toEqual([]);
+        expect(await logged("finish")).toHaveLength(1);
+    });
+
+    test("finish reopens an approved doc, and the next verdict ends the request", async () => {
+        const { session, anchor, agent } = await setup();
+        const { id } = await session.comment({ anchor: anchor("quick"), text: "Why?" });
+        await session.setVerdict({ state: "dropped" });
+        const finished = await session.requestFinish();
+        expect(session.snapshot()).toMatchObject({
+            verdict: { state: "open", seq: finished.seq },
+            finish: { ids: [id] },
+        });
+        await agent({ type: "resolve", by: "agent", id });
+        expect(await session.setVerdict({ state: "approved" })).toMatchObject({ ok: true });
+        expect(session.snapshot().finish).toBeUndefined();
+    });
+
+    test("finish keeps a BOM, CRLF and a missing trailing newline", async () => {
+        const source = "﻿# Title\r\n\r\nThe quick brown fox.\r\n\r\nNo newline at the end";
+        const { path, session, agentSuggest } = await setup(source);
+        await agentSuggest("quick", "slow");
+        await agentSuggest("newline", "line\r\nbreak");
+        expect(await session.requestFinish()).toMatchObject({ ids: [], unapplied: [] });
+        expect(
+            readFileSync(path).equals(
+                Buffer.from(
+                    "﻿# Title\r\n\r\nThe slow brown fox.\r\n\r\nNo line\r\nbreak at the end",
+                ),
+            ),
+        ).toBe(true);
     });
 });

@@ -10,17 +10,21 @@ import {
     type DocSettingKey,
     type EditEvent,
     type Event,
+    type FinishResult,
     type Range,
     type SaveResult,
     type SourceSplice,
     type Thread,
     type ThreadId,
+    type VerdictResult,
+    type VerdictState,
 } from "../core/model.ts";
 import {
     applyEvent,
     emptyState,
     nextThreadId,
     reanchorInput,
+    unresolvedThreads,
     withoutDeleted,
     type DocState,
 } from "../core/threads.ts";
@@ -65,6 +69,9 @@ export interface HashMemory {
     read(): KnownHash | null;
     write(known: KnownHash): void;
 }
+
+/** The verdict note is printed to the agent on every `pending`, so its size is bounded. */
+export const MAX_VERDICT_NOTE = 200;
 
 const OK: Ok = { ok: true };
 const MISSING: SaveResult & RetractResult = { ok: false, reason: "missing" };
@@ -194,6 +201,8 @@ export class DocSession {
             changedOnDisk: this.state.changedOnDisk,
             missing: this.missing,
             version: this.state.version,
+            verdict: this.state.verdict,
+            finish: this.state.finish,
         };
         this.cached = { key, json: JSON.stringify(snapshot) };
         return this.cached.json;
@@ -292,35 +301,36 @@ export class DocSession {
 
     /** Applies a pending suggestion at its anchor, then resolves; both under one lock. */
     async accept(id: ThreadId): Promise<Versioned<SaveResult & Partial<Seq>>> {
-        return await this.mutate((txn): SaveResult & Partial<Seq> => {
-            const thread = this.thread(id);
-            const suggestion = thread.suggestion;
-            // A doc note never carries a suggestion; the guard only narrows the type.
-            if (!suggestion || !thread.anchor) {
-                throw new WireFailure(409, "no-suggestion");
+        return await this.mutate((txn) => this.acceptIn(txn, this.thread(id)), MISSING);
+    }
+
+    private acceptIn(txn: LogTxn, thread: Thread): SaveResult & Partial<Seq> {
+        const { id, suggestion } = thread;
+        // A doc note never carries a suggestion; the guard only narrows the type.
+        if (!suggestion || !thread.anchor) {
+            throw new WireFailure(409, "no-suggestion");
+        }
+        if (suggestion.status === "pending") {
+            if (this.missing) {
+                return { ok: false, reason: "missing" };
             }
-            if (suggestion.status === "pending") {
-                if (this.missing) {
-                    return { ok: false, reason: "missing" };
-                }
-                const range = resolveAnchor(this.source, thread.anchor);
-                if (!range) {
-                    return { ok: false, reason: "conflict", current: "" };
-                }
-                const result = applyEditIn(txn, {
-                    start: range.start,
-                    before: thread.anchor.exact,
-                    after: suggestion.replace,
-                    cause: "accept",
-                    by: "user",
-                    id,
-                });
-                if (!result.ok) {
-                    return this.failure(result, range.start, thread.anchor.exact.length);
-                }
+            const range = resolveAnchor(this.source, thread.anchor);
+            if (!range) {
+                return { ok: false, reason: "conflict", current: "" };
             }
-            return appended(txn.append([{ type: "accept", by: "user", id }]));
-        }, MISSING);
+            const result = applyEditIn(txn, {
+                start: range.start,
+                before: thread.anchor.exact,
+                after: suggestion.replace,
+                cause: "accept",
+                by: "user",
+                id,
+            });
+            if (!result.ok) {
+                return this.failure(result, range.start, thread.anchor.exact.length);
+            }
+        }
+        return appended(txn.append([{ type: "accept", by: "user", id }]));
     }
 
     async reject(id: ThreadId, note?: string): Promise<Versioned<Ok & Seq>> {
@@ -566,6 +576,81 @@ export class DocSession {
         return await this.mutate((txn) => {
             txn.append([{ type: "setting", by: "user", key, value }]);
             return OK;
+        });
+    }
+
+    /**
+     * The refusal is decided under the lock, on the log as reconciled there: a thread opened a
+     * moment before the request counts. The hash is the file's as read in that same reconcile.
+     */
+    async setVerdict(input: {
+        state: VerdictState;
+        note?: string;
+        asIs?: boolean;
+    }): Promise<Versioned<VerdictResult & Partial<Seq>>> {
+        const note = verdictNote(input.note);
+        return await this.mutate((txn): VerdictResult & Partial<Seq> => {
+            if (this.missing) {
+                throw new WireFailure(409, "missing");
+            }
+            if (input.state === "open" && (this.state.verdict?.state ?? "open") === "open") {
+                return OK;
+            }
+            const ids =
+                input.state === "approved"
+                    ? unresolvedThreads(this.state).map((thread) => thread.id)
+                    : [];
+            if (ids.length > 0 && !input.asIs) {
+                return { ok: false, reason: "unresolved", ids };
+            }
+            return appended(
+                txn.append([
+                    {
+                        type: "verdict",
+                        by: "user",
+                        state: input.state,
+                        hash: this.hash,
+                        ...(note ? { note } : {}),
+                        ...(ids.length > 0 ? { closed: ids } : {}),
+                    },
+                ]),
+            );
+        });
+    }
+
+    /**
+     * Accepts the pending agent suggestions in the order they were made, each against the source
+     * the one before it left: after every accept the log and the file are folded back in, so an
+     * anchor a previous accept moved or swallowed is seen as it now is. One that no longer applies
+     * logs nothing and stays pending. No `send` for the drafts: the finish event names them and
+     * its fold opens them, so the agent hears of each thread once.
+     */
+    async requestFinish(): Promise<Versioned<FinishResult & Partial<Seq>>> {
+        return await this.mutate((txn): FinishResult & Partial<Seq> => {
+            if (this.missing) {
+                throw new WireFailure(409, "missing");
+            }
+            const suggested = unresolvedThreads(this.state)
+                .filter(
+                    ({ suggestion }) =>
+                        suggestion?.by === "agent" && suggestion.status === "pending",
+                )
+                .sort((a, b) => a.suggestion!.seq - b.suggestion!.seq)
+                .map((thread) => thread.id);
+            const unapplied: ThreadId[] = [];
+            for (const id of suggested) {
+                if (this.acceptIn(txn, this.thread(id)).ok) {
+                    this.reconcile(txn);
+                } else {
+                    unapplied.push(id);
+                }
+            }
+            const ids = unresolvedThreads(this.state).map((thread) => thread.id);
+            if (ids.length === 0) {
+                return { ids, unapplied };
+            }
+            const { seq } = appended(txn.append([{ type: "finish", by: "user", ids }]));
+            return { ids, unapplied, seq };
         });
     }
 
@@ -936,6 +1021,18 @@ export function mapStartStrict(
         }
     }
     return { start: at, exact: true };
+}
+
+/** One line, trimmed; undefined when nothing is left. Longer than the cap is the client's error. */
+function verdictNote(note: string | undefined): string | undefined {
+    const line = note?.replace(/\s*[\r\n]+\s*/g, " ").trim();
+    if (!line) {
+        return undefined;
+    }
+    if (line.length > MAX_VERDICT_NOTE) {
+        throw new WireFailure(400, "bad-request", `note over ${MAX_VERDICT_NOTE} characters`);
+    }
+    return line;
 }
 
 function eventsAfter(events: readonly Event[], seq: number): Event[] {
