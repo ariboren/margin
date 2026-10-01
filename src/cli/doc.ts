@@ -95,18 +95,31 @@ function isUnder(path: string, dir: string): boolean {
     return path.startsWith(dir.endsWith(sep) ? dir : dir + sep);
 }
 
+/** Candidate docs named in one error; the registry holds far more than an error line should. */
+const NAMED_MAX = 3;
+
+function awaitsAnswer(events: readonly Event[], id: ThreadId): boolean {
+    const state = withoutDeleted(foldLog(events)).threads.get(id)?.state;
+    return state === "open" || state === "working" || state === "replied";
+}
+
 /**
- * The doc a command acts on: the explicit argument, then `MARGIN_DOC`, then the recent docs
- * under cwd (those holding `id` when one is given). Anything but one match is an error naming
- * the candidates, so a reply never lands on the wrong doc's `c3`. The doc must be a file.
+ * The doc a command acts on: the explicit argument, then `MARGIN_DOC`, then the recent docs.
+ * Without an id only those under cwd count. With one, a doc under cwd holding it wins; failing
+ * that, any recent doc holding it, because a doc is often opened from another directory. A write
+ * (`write`) takes an outside doc only while that thread is unresolved: ids repeat across docs, so
+ * a mistyped id must not land a reply on an old doc that happens to hold it, while a read on the
+ * wrong doc costs nothing. Anything but one match is an error naming the candidates, newest
+ * first. The doc must be a file.
  */
 export async function resolveDoc(input: {
     explicit?: string;
     id?: ThreadId;
+    write?: boolean;
     cwd: string;
     env: Env;
 }): Promise<DocTarget> {
-    const { explicit, id, cwd, env } = input;
+    const { explicit, id, write = false, cwd, env } = input;
     if (explicit !== undefined) return existing(resolve(cwd, explicit), explicit);
     if (env.MARGIN_DOC) return existing(resolve(cwd, env.MARGIN_DOC), env.MARGIN_DOC);
 
@@ -116,22 +129,45 @@ export async function resolveDoc(input: {
     } catch {
         // Keep the given path.
     }
-    const candidates = recentDocs(env).filter(
-        (doc) => isUnder(doc, root) && existsSync(sidecar(doc).log),
-    );
-    const matches: string[] = [];
-    for (const doc of candidates) {
-        if (id === undefined || mentions((await readLog(doc)).events, id)) matches.push(doc);
-    }
-    if (matches.length === 1) return existing(matches[0]!, relative(root, matches[0]!));
-    const named = (matches.length > 0 ? matches : candidates).map((doc) => relative(root, doc));
-    return {
+    const name = (doc: string) => (isUnder(doc, root) ? relative(root, doc) : doc);
+    const one = (doc: string) => existing(doc, name(doc));
+    const fail = (error: "not-unique" | "not-found", docs: string[]): DocTarget => ({
         ok: false,
         ack: {
             ok: false,
             ...(id === undefined ? {} : { id }),
-            error: matches.length > 1 ? "not-unique" : "not-found",
-            detail: named.length > 0 ? `pass the doc: ${named.join(" ")}` : "pass the doc",
+            error,
+            detail:
+                docs.length > 0
+                    ? `pass the doc: ${docs.slice(0, NAMED_MAX).map(name).join(" ")}`
+                    : "pass the doc",
         },
-    };
+    });
+
+    const recent = recentDocs(env).filter((doc) => existsSync(sidecar(doc).log));
+    const local = recent.filter((doc) => isUnder(doc, root));
+    if (id === undefined) {
+        if (local.length === 1) return one(local[0]!);
+        return fail(local.length > 1 ? "not-unique" : "not-found", local);
+    }
+
+    const localHolders: string[] = [];
+    for (const doc of local) {
+        if (mentions((await readLog(doc)).events, id)) localHolders.push(doc);
+    }
+    if (localHolders.length === 1) return one(localHolders[0]!);
+    if (localHolders.length > 1) return fail("not-unique", localHolders);
+
+    const holders: string[] = [];
+    const usable: string[] = [];
+    for (const doc of recent) {
+        if (isUnder(doc, root)) continue;
+        const { events } = await readLog(doc);
+        if (!mentions(events, id)) continue;
+        holders.push(doc);
+        if (!write || awaitsAnswer(events, id)) usable.push(doc);
+    }
+    if (usable.length === 1) return one(usable[0]!);
+    if (usable.length > 1) return fail("not-unique", usable);
+    return fail("not-found", holders.length > 0 ? holders : local.length > 0 ? local : recent);
 }
