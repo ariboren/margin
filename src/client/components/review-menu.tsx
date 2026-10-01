@@ -1,4 +1,4 @@
-import type { JSX } from "preact";
+import type { ComponentChildren, JSX } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { hashText } from "../../core/blocks.ts";
 import type { DocSnapshot, DocStore, ThreadId, VerdictState } from "../../core/model.ts";
@@ -69,25 +69,12 @@ export function kindLines(counts: Record<UnresolvedKind, number>): string[] {
         .map((kind) => kindLine[kind](counts[kind]));
 }
 
-export function unresolvedHead(model: ReviewModel): string {
-    const total = model.unresolved.length;
-    const verb = total === 1 ? "is" : "are";
-    return model.finish && model.finish.remaining === total
-        ? `Your agent is finishing ${count(total, "thread")}`
-        : `${count(total, "thread")} ${verb} unresolved`;
+export function unresolvedHead(total: number): string {
+    return `You have ${count(total, "unresolved thread")}`;
 }
 
-/** What asking the agent to finish would do; null when there is nothing to accept or send. */
-export function finishPreview(accepts: number, hands: number): string | null {
-    const accept = `Accepts ${count(accepts, "pending suggestion")} now`;
-    const threads = `${count(hands, "thread")} to your agent`;
-    if (accepts > 0 && hands > 0) {
-        return `${accept} and sends ${threads}. You approve after.`;
-    }
-    if (hands > 0) {
-        return `Sends ${threads}. You approve after.`;
-    }
-    return accepts > 0 ? `${accept}. You approve after.` : null;
+export function unresolvedSubhead(total: number): string {
+    return `Decide how to handle ${total === 1 ? "it" : "them"} before approving`;
 }
 
 export function finishOutcome(accepted: number, handed: number): string {
@@ -107,8 +94,9 @@ export function asIsWarning(total: number): string {
 }
 
 /**
- * Asking again does nothing while every unresolved thread is already the agent's to finish;
- * the path comes back once one is waiting on the user, held, or new.
+ * Whether "Let the agent resolve" is offered. Asking again does nothing while every unresolved
+ * thread is already the agent's to finish; the path comes back once one is waiting on the user,
+ * held, or new.
  */
 export function canAskToFinish(model: ReviewModel): boolean {
     const total = model.unresolved.length;
@@ -122,12 +110,14 @@ export interface VerdictAction {
     state: VerdictState;
     icon: "check" | "slash" | "reopen";
     look: "accept" | "danger" | "primary";
+    /** Shown in its place but not available: Approve while threads are unresolved. */
+    disabled?: true;
 }
 
 /**
  * The verdict buttons in the order they show and take focus: the positive or primary one first,
  * as a thread card puts Accept before Reject. A declined doc only reopens; approving is done from
- * the open state.
+ * the open state, where Approve keeps its place but is disabled while threads are unresolved.
  */
 export function verdictActions(model: ReviewModel): VerdictAction[] {
     const reopen: VerdictAction = {
@@ -148,14 +138,21 @@ export function verdictActions(model: ReviewModel): VerdictAction[] {
         case "declined":
             return [reopen];
         case "open":
-            return model.unresolved.length === 0
-                ? [
-                      { label: "Approve", state: "approved", icon: "check", look: "accept" },
-                      decline("Decline"),
-                  ]
-                : [decline("Decline")];
+            return [
+                {
+                    label: "Approve",
+                    state: "approved",
+                    icon: "check",
+                    look: "accept",
+                    ...(model.unresolved.length > 0 ? { disabled: true as const } : {}),
+                },
+                decline("Decline"),
+            ];
     }
 }
+
+/** The line that says why Approve is disabled; the button points at it. */
+const WHY_NOT_ID = "review-why-not";
 
 /** The server refuses a longer note. */
 const NOTE_MAX = 200;
@@ -163,7 +160,7 @@ const NOTE_MAX = 200;
 type Panel =
     | { kind: "closed" }
     | { kind: "main" }
-    /** "Approve as is" was clicked; the next click closes the threads. */
+    /** "Approve as-is" was clicked; the next click closes the threads. */
     | { kind: "confirm" }
     /** An approval the store refused: a thread arrived between the render and the click. */
     | { kind: "refused"; count: number }
@@ -174,7 +171,7 @@ interface ReviewMenuProps {
     store: DocStore;
     snapshot: DocSnapshot;
     now: number;
-    /** Where "step through them" starts. */
+    /** Where "Review one by one" starts. */
     first: ThreadId | undefined;
     /** No agent is watching the doc, so a finish request would wait for one. */
     agentAway: boolean;
@@ -276,9 +273,9 @@ export function ReviewMenu(props: ReviewMenuProps): JSX.Element {
     };
 
     const noteField = (
-        <input
-            type="text"
+        <textarea
             class="review-note"
+            rows={2}
             aria-label="Note for your agent (optional)"
             placeholder="Note for your agent (optional)"
             maxLength={NOTE_MAX}
@@ -319,7 +316,7 @@ export function ReviewMenu(props: ReviewMenuProps): JSX.Element {
             case "confirm":
                 return (
                     <>
-                        <p class="review-head">Approve as is?</p>
+                        <p class="review-head">Approve as-is?</p>
                         <p class="review-line">{asIsWarning(total)}</p>
                         {noteField}
                         <div class="review-actions">
@@ -361,11 +358,10 @@ export function ReviewMenu(props: ReviewMenuProps): JSX.Element {
             return (
                 <>
                     {refused}
-                    <p class="review-line">
-                        {model.finish
-                            ? `Your agent settled ${model.finish.total === 1 ? "the thread" : `all ${model.finish.total} threads`}.`
-                            : "Nothing is waiting. Approve when you're ready."}
-                    </p>
+                    <div class="review-intro">
+                        <p class="review-head">Add your review decision</p>
+                        <p class="review-line">All threads are resolved or closed.</p>
+                    </div>
                     {noteField}
                     <VerdictButtons
                         actions={verdictActions(model)}
@@ -375,34 +371,42 @@ export function ReviewMenu(props: ReviewMenuProps): JSX.Element {
                 </>
             );
         }
-        const preview = canAskToFinish(model) ? finishPreview(model.accepts, model.hands) : null;
         const { first } = props;
         return (
             <>
                 {refused}
-                <p class="review-head">{unresolvedHead(model)}</p>
+                <div class="review-intro">
+                    <p class="review-head">{unresolvedHead(total)}</p>
+                    <p class="review-line" id={WHY_NOT_ID}>
+                        {unresolvedSubhead(total)}
+                    </p>
+                </div>
                 <ul class="review-kinds">
                     {kindLines(model.counts).map((line) => (
                         <li key={line}>{line}</li>
                     ))}
                 </ul>
                 <div class="review-paths">
+                    <Path
+                        title="Approve as-is"
+                        detail="Pending threads are left unactioned"
+                        onClick={() => setPanel({ kind: "confirm" })}
+                    />
                     {first ? (
                         <Path
-                            title="Step through them"
-                            detail="Go to the first one. Press j for the next."
+                            title="Review one by one"
+                            detail={
+                                <>
+                                    Use <kbd>j</kbd> and <kbd>k</kbd> to step through
+                                </>
+                            }
                             onClick={() => show(first)}
                         />
                     ) : null}
-                    <Path
-                        title="Approve as is"
-                        detail={asIsWarning(total)}
-                        onClick={() => setPanel({ kind: "confirm" })}
-                    />
-                    {preview ? (
+                    {canAskToFinish(model) ? (
                         <Path
-                            title="Ask your agent to finish"
-                            detail={preview}
+                            title="Let the agent resolve"
+                            detail="They'll apply your feedback before you approve"
                             quiet={
                                 props.agentAway
                                     ? "No agent is watching this doc right now."
@@ -502,7 +506,7 @@ function Standing({
 
 function Path(props: {
     title: string;
-    detail: string;
+    detail: ComponentChildren;
     quiet?: string;
     disabled?: boolean;
     onClick: () => void;
@@ -563,7 +567,11 @@ function VerdictButtons({
                     type="button"
                     class={lookClass[action.look]}
                     disabled={busy}
-                    onClick={() => onPick(action.state)}
+                    // Not `disabled`: the button stays in the tab order, so a screen reader reaches
+                    // it and reads the line that says why.
+                    aria-disabled={action.disabled}
+                    aria-describedby={action.disabled ? WHY_NOT_ID : undefined}
+                    onClick={action.disabled ? undefined : () => onPick(action.state)}
                 >
                     <Mark kind={action.icon} />
                     {action.label}

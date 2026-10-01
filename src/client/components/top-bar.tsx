@@ -46,12 +46,15 @@ export function TopBar(props: TopBarProps): JSX.Element {
     const drafts = snapshot.threads.filter((thread) => thread.state === "draft").length;
     // The detached action takes the room the review control's words had.
     const crowded = snapshot.threads.some(isDetached);
+    const barClass = ["topbar", crowded ? "topbar-crowded" : "", drafts > 0 ? "topbar-holding" : ""]
+        .filter(Boolean)
+        .join(" ");
     const liveTip = snapshot.settings.hold
         ? "Turn on so your agent receives your comments as you send them"
         : "Turn off to queue comments and send them as a batch when you're ready";
     return (
         <>
-            <header class={crowded ? "topbar topbar-crowded" : "topbar"}>
+            <header class={barClass}>
                 <div class="topbar-start">
                     <OutlineButton
                         inDrawer={props.outlineInDrawer}
@@ -69,14 +72,6 @@ export function TopBar(props: TopBarProps): JSX.Element {
                 <div class="topbar-end">
                     <DetachedAction store={store} snapshot={snapshot} undo={props.undo} />
                     {props.undo ? <UndoButtons stack={props.undo} /> : null}
-                    <ReviewMenu
-                        store={store}
-                        snapshot={snapshot}
-                        now={props.now}
-                        first={props.firstUnresolved}
-                        agentAway={props.chip.kind === "none" || props.chip.kind === "disconnected"}
-                        onSelectThread={props.onSelectThread}
-                    />
                     <span class="hold">
                         <Tooltip text={liveTip}>
                             {(tip) => (
@@ -103,6 +98,14 @@ export function TopBar(props: TopBarProps): JSX.Element {
                             </button>
                         ) : null}
                     </span>
+                    <ReviewMenu
+                        store={store}
+                        snapshot={snapshot}
+                        now={props.now}
+                        first={props.firstUnresolved}
+                        agentAway={props.chip.kind === "none" || props.chip.kind === "disconnected"}
+                        onSelectThread={props.onSelectThread}
+                    />
                     <span class="topbar-divider" role="separator" aria-orientation="vertical" />
                     <span class="topbar-view">
                         <Settings

@@ -6,12 +6,12 @@ import {
     asIsWarning,
     canAskToFinish,
     finishOutcome,
-    finishPreview,
     kindLines,
     labelText,
     reviewLabel,
     unappliedLine,
     unresolvedHead,
+    unresolvedSubhead,
     verdictActions,
 } from "./review-menu.tsx";
 
@@ -83,8 +83,16 @@ describe("verdictActions", () => {
         ]);
     });
 
-    test("with threads unresolved only Decline is a button; approving goes through the paths", () => {
-        expect(shown({ unresolved: ["c1"] })).toEqual([["Decline", "declined", "danger"]]);
+    test("with threads unresolved Approve keeps its place before Decline, disabled", () => {
+        expect(shown({ unresolved: ["c1"] })).toEqual([
+            ["Approve", "approved", "accept"],
+            ["Decline", "declined", "danger"],
+        ]);
+        const disabled = (change: Partial<ReviewModel>) =>
+            verdictActions(model(change)).map((action) => action.disabled ?? false);
+        expect(disabled({ unresolved: ["c1"] })).toEqual([true, false]);
+        expect(disabled({})).toEqual([false, false]);
+        expect(disabled({ state: "approved" })).toEqual([false, false]);
     });
 
     test("an approved doc reopens first, then declines", () => {
@@ -126,21 +134,11 @@ describe("popover copy", () => {
         expect(kindLines(none)).toEqual([]);
     });
 
-    test("the head counts the threads, or says the agent has them all", () => {
-        expect(unresolvedHead(model({ unresolved: ["c1"] }))).toBe("1 thread is unresolved");
-        expect(unresolvedHead(model({ unresolved: ["c1", "c2"] }))).toBe(
-            "2 threads are unresolved",
-        );
-        const finishing: Partial<ReviewModel> = {
-            unresolved: ["c1", "c2"],
-            finish: { total: 2, remaining: 2 },
-        };
-        expect(unresolvedHead(model(finishing))).toBe("Your agent is finishing 2 threads");
-        const mixed: Partial<ReviewModel> = {
-            unresolved: ["c1", "c2"],
-            finish: { total: 2, remaining: 1 },
-        };
-        expect(unresolvedHead(model(mixed))).toBe("2 threads are unresolved");
+    test("the heading and the line under it, singular and plural", () => {
+        expect(unresolvedHead(1)).toBe("You have 1 unresolved thread");
+        expect(unresolvedHead(9)).toBe("You have 9 unresolved threads");
+        expect(unresolvedSubhead(1)).toBe("Decide how to handle it before approving");
+        expect(unresolvedSubhead(9)).toBe("Decide how to handle them before approving");
     });
 
     test("approve as is says what it leaves undone", () => {
@@ -150,16 +148,6 @@ describe("popover copy", () => {
         expect(asIsWarning(1)).toBe(
             "Closes the thread without action. Pending suggestions are not applied.",
         );
-    });
-
-    test("the finish preview follows the numbers and is absent with none", () => {
-        expect(finishPreview(1, 4)).toBe(
-            "Accepts 1 pending suggestion now and sends 4 threads to your agent. You approve after.",
-        );
-        expect(finishPreview(0, 4)).toBe("Sends 4 threads to your agent. You approve after.");
-        expect(finishPreview(0, 1)).toBe("Sends 1 thread to your agent. You approve after.");
-        expect(finishPreview(2, 0)).toBe("Accepts 2 pending suggestions now. You approve after.");
-        expect(finishPreview(0, 0)).toBeNull();
     });
 
     test("the finish outcome follows the numbers too", () => {

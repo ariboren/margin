@@ -194,6 +194,8 @@
     .doc-name {
         position: relative;
         min-width: 0;
+        /* In a tight bar the name shortens before the agent chip gives anything up. */
+        flex-shrink: 100;
         margin-inline-start: -8px;
     }
 
@@ -371,6 +373,11 @@
         .agent-chip-text,
         .agent-chip-button {
             padding: 3px 7px;
+        }
+
+        /* Down to its mark, the chip has nothing left to give; the doc name shortens instead. */
+        .agent-chip {
+            flex: none;
         }
     }
 
@@ -584,6 +591,20 @@
         color: var(--ink);
     }
 
+    .review-intro {
+        display: grid;
+        gap: 2px;
+    }
+
+    .review-path kbd {
+        font-size: 0.85em;
+    }
+
+    .review-actions .button[aria-disabled="true"] {
+        opacity: 0.4;
+        cursor: default;
+    }
+
     .review-kinds {
         display: grid;
         gap: 2px;
@@ -657,6 +678,9 @@
         background: var(--paper);
         color: var(--ink);
         font: inherit;
+        line-height: 1.45;
+        /* Like the agent chip's popover field: two lines, no handle. */
+        resize: none;
     }
 
     .review-note::placeholder {
@@ -742,10 +766,24 @@
         }
     }
 
-    /* Up to 520 px the bar is full once the detached action shows, with the doc name already down
+    /* Up to 600 px the bar is full once the detached action shows, with the doc name already down
        to a letter. The control comes back when the detached threads are resolved, one tap away. */
-    @media (max-width: 520px) {
+    @media (max-width: 600px) {
         .topbar-crowded .review {
+            display: none;
+        }
+    }
+
+    /* "Send all (N)" fills a bar this narrow the same way. */
+    @media (max-width: 440px) {
+        .topbar-holding .review {
+            display: none;
+        }
+    }
+
+    /* Both at once fill a bar up to 840 px. */
+    @media (max-width: 840px) {
+        .topbar-crowded.topbar-holding .review {
             display: none;
         }
     }
