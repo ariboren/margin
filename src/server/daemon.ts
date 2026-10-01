@@ -68,6 +68,11 @@ import { watchDoc, type WatchHandle } from "./watch.ts";
 
 /** The daemon exits after this long with no tab connected. */
 export const IDLE_EXIT_MS = 30 * 60 * 1000;
+/**
+ * How long the daemon outlives its last tab. Longer than a reload and than the page's retry after
+ * a dropped stream (`LOST_RETRY_MS`), so neither ends it under a tab that is still open.
+ */
+export const LAST_TAB_EXIT_MS = 5_000;
 
 const KEEPALIVE_MS = 15_000;
 /** How often a doc with open tabs rechecks its watcher's presence file. */
@@ -86,6 +91,11 @@ export interface ServerOptions {
     port?: number;
     /** Exit hook for idle; unset means never idle out. */
     idleMs?: number;
+    /**
+     * Calls `onIdle` this long after the last connected tab closes, unless a tab connects or a doc
+     * is registered first. Unset means only `idleMs` ends the daemon.
+     */
+    lastTabMs?: number;
     onIdle?: () => void;
     /** Called for `POST /api/stop` after the response is sent. */
     onStop?: () => void;
@@ -147,6 +157,8 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
     const opening = new Map<DocId, Promise<Registered>>();
     let lastActivity = Date.now();
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastTabTimer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
     const boot = randomUUID();
     let builds = 0;
     const devStamp = options.dev ? () => `${boot}.${builds}` : undefined;
@@ -173,7 +185,25 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
 
     const expectedMs = options.expectedMs ?? EXPECTED_MS;
 
+    /**
+     * Runs only from a tab closing, so a daemon no tab has reached yet (the browser still
+     * starting) waits the long idle. The count is across every doc.
+     */
+    const armLastTab = () => {
+        clearTimeout(lastTabTimer);
+        if (options.lastTabMs === undefined || !options.onIdle || clients() > 0) {
+            return;
+        }
+        lastTabTimer = setTimeout(() => {
+            if (clients() === 0) {
+                options.onIdle!();
+            }
+        }, options.lastTabMs);
+    };
+
     const register = async (path: string, agent?: AgentIdentity): Promise<RegisterResponse> => {
+        // An open is about to bring a tab; until it does, only the long idle applies.
+        clearTimeout(lastTabTimer);
         const real = sidecar(path).doc;
         if (!isFile(real)) {
             throw new WireFailure(404, "missing", "doc not found");
@@ -359,12 +389,18 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
         }
         if (action === "events" && request.method === "GET") {
             server.timeout(request, 0);
+            clearTimeout(lastTabTimer);
             return events(
                 doc,
                 request,
                 () => {
+                    // Stopping closes every stream; that is not a tab leaving.
+                    if (stopped) {
+                        return;
+                    }
                     lastActivity = Date.now();
                     armIdle();
+                    armLastTab();
                 },
                 devStamp,
             );
@@ -468,7 +504,9 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
             }
         },
         async stop() {
+            stopped = true;
             clearTimeout(idleTimer);
+            clearTimeout(lastTabTimer);
             clearInterval(presence);
             for (const { watcher } of docs.values()) {
                 watcher.close();
@@ -835,6 +873,7 @@ function logError(caught: unknown): void {
 async function runDaemon(): Promise<void> {
     const paths = statePaths(ensureStateDir(stateDir()));
     const idleMs = Number(process.env.MARGIN_IDLE_MS) || IDLE_EXIT_MS;
+    const lastTabMs = Number(process.env.MARGIN_LAST_TAB_MS) || LAST_TAB_EXIT_MS;
     const dev = process.env.MARGIN_DEV === "1";
     let server: MarginServer | undefined;
     let stopping = false;
@@ -859,7 +898,7 @@ async function runDaemon(): Promise<void> {
                   token: process.env.MARGIN_DEV_TOKEN || undefined,
                   clientDir: process.env.MARGIN_DEV_CLIENT_DIR || undefined,
               }
-            : { idleMs, onIdle: () => void shutdown() }),
+            : { idleMs, lastTabMs, onIdle: () => void shutdown() }),
     });
     writeDaemonInfo(paths.info, {
         pid: process.pid,

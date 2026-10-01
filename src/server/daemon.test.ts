@@ -571,6 +571,130 @@ describe("dev reload", () => {
     });
 });
 
+describe("exit after the last tab", () => {
+    const WINDOW = 300;
+    let fired: number;
+    let brief: MarginServer;
+
+    const start = async () => {
+        fired = 0;
+        // The long idle is far off, so only the window can fire here.
+        brief = await startServer({
+            idleMs: 60_000,
+            lastTabMs: WINDOW,
+            onIdle: () => {
+                fired++;
+            },
+        });
+    };
+    /** A tab on the doc, connected once its first snapshot is in. */
+    const tab = async (docId: string) => {
+        const stream = await snapshotStream(brief, docId);
+        await stream.next();
+        return stream.abort;
+    };
+    const tabs = () => brief.status().docs.reduce((sum, doc) => sum + doc.clients, 0);
+    const closed = async (abort: AbortController, left: number) => {
+        abort.abort();
+        while (tabs() !== left) {
+            await Bun.sleep(5);
+        }
+    };
+
+    test("the last tab closing ends the daemon after the window, not before", async () => {
+        await start();
+        try {
+            const { docId } = await brief.register(docPath("edge-crlf.md"));
+            const only = await tab(docId);
+            await Bun.sleep(WINDOW * 2);
+            expect(fired).toBe(0);
+            await closed(only, 0);
+            await Bun.sleep(WINDOW / 3);
+            expect(fired).toBe(0);
+            await Bun.sleep(WINDOW);
+            expect(fired).toBe(1);
+        } finally {
+            await brief.stop();
+        }
+    });
+
+    test("a tab reconnecting inside the window keeps it alive", async () => {
+        await start();
+        try {
+            const { docId } = await brief.register(docPath("edge-crlf.md"));
+            await closed(await tab(docId), 0);
+            await Bun.sleep(WINDOW / 3);
+            const again = await tab(docId);
+            await Bun.sleep(WINDOW * 2);
+            expect(fired).toBe(0);
+            again.abort();
+        } finally {
+            await brief.stop();
+        }
+    });
+
+    test("a daemon no tab has reached waits the long idle only", async () => {
+        await start();
+        try {
+            await brief.register(docPath("edge-crlf.md"));
+            await Bun.sleep(WINDOW * 2);
+            expect(fired).toBe(0);
+        } finally {
+            await brief.stop();
+        }
+    });
+
+    test("with two docs open, only the last tab closing starts the window", async () => {
+        await start();
+        try {
+            const a = await brief.register(docPath("edge-crlf.md"));
+            const b = await brief.register(docPath("edge-nonl.md"));
+            const first = await tab(a.docId);
+            const second = await tab(b.docId);
+            await closed(first, 1);
+            await Bun.sleep(WINDOW * 2);
+            expect(fired).toBe(0);
+            await closed(second, 0);
+            await Bun.sleep(WINDOW * 2);
+            expect(fired).toBe(1);
+        } finally {
+            await brief.stop();
+        }
+    });
+
+    test("another doc's tab connecting inside the window keeps it alive", async () => {
+        await start();
+        try {
+            const a = await brief.register(docPath("edge-crlf.md"));
+            const b = await brief.register(docPath("edge-nonl.md"));
+            await closed(await tab(a.docId), 0);
+            const other = await tab(b.docId);
+            await Bun.sleep(WINDOW * 2);
+            expect(fired).toBe(0);
+            other.abort();
+        } finally {
+            await brief.stop();
+        }
+    });
+
+    test("an open inside the window ends it; with no tab after, the long idle is back", async () => {
+        await start();
+        try {
+            const { docId } = await brief.register(docPath("edge-crlf.md"));
+            await closed(await tab(docId), 0);
+            await brief.register(docPath("edge-crlf.md"));
+            await Bun.sleep(WINDOW * 2);
+            expect(fired).toBe(0);
+            // The next close that reaches zero starts a new window.
+            await closed(await tab(docId), 0);
+            await Bun.sleep(WINDOW * 2);
+            expect(fired).toBe(1);
+        } finally {
+            await brief.stop();
+        }
+    });
+});
+
 describe("idle exit", () => {
     const ping = async (idle: MarginServer, headers: Record<string, string>, status: number) => {
         const until = Date.now() + 600;
