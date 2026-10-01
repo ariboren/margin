@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { Ceilings } from "../../scripts/budget.ts";
 import { FakeAgent, type Answer, type Policy } from "../../scripts/fake-agent.ts";
 import { byteLength } from "../../src/core/diff.ts";
-import type { ThreadId } from "../../src/core/model.ts";
+import type { ThreadId, VerdictState } from "../../src/core/model.ts";
 import { openDoc, stopDaemon } from "../../src/server/api.ts";
 import { Tab } from "./tab.ts";
 
@@ -22,6 +22,8 @@ const QUOTES = [
     "content hash of that document",
 ];
 const NO_WAKE_MS = 800;
+/** The verdict that sets a doc aside: its stored state, and the word `watch` and `pending` print. */
+const DROPPED = "dropped" satisfies VerdictState;
 const budget = JSON.parse(
     readFileSync(join(import.meta.dir, "..", "..", "budget.json"), "utf8"),
 ) as Ceilings;
@@ -41,6 +43,7 @@ afterAll(async () => {
 });
 
 interface World {
+    doc: string;
     original: Buffer;
     tab: Tab;
     agent: FakeAgent;
@@ -58,6 +61,7 @@ async function world(): Promise<World> {
     const { url, docId } = await openDoc(doc, { env: daemonEnv, openTab: false });
     const agentEnv = { MARGIN_STATE_DIR: join(root, "state"), MARGIN_DEBOUNCE_MS: "0" };
     return {
+        doc,
         original: readFileSync(doc),
         tab: new Tab(url, docId),
         agent: new FakeAgent({ doc, cwd: dir, env: agentEnv }),
@@ -263,5 +267,197 @@ describe("loop against a live daemon", () => {
 
         await agent.answer(id, { reply: "Answered." });
         expect(await agent.pending()).toEqual({ threads: [], edits: [] });
+    });
+
+    test("approve: refused with threads open, as is closes them; an edit marks it changed, a comment reopens", async () => {
+        const { tab, agent, original, bytes } = await world();
+        const suggested = await tab.comment(QUOTES[0]!, "Say what drove the growth.");
+        await agent.handleBatch(() => ({ suggest: "six nodes to thirty" }), 5_000);
+        const open = await tab.comment(QUOTES[3]!, "Is this retention right?");
+
+        expect(await tab.post("verdict", { state: "approved" })).toMatchObject({
+            ok: false,
+            reason: "unresolved",
+            ids: [suggested, open],
+        });
+        expect((await tab.snapshot()).verdict).toBeUndefined();
+
+        expect(await tab.post("verdict", { state: "approved", asIs: true })).toMatchObject({
+            ok: true,
+        });
+        const closed = await tab.snapshot();
+        expect(closed.verdict).toMatchObject({ state: "approved" });
+        expect(closed.threads.map((thread) => thread.state)).toEqual(["resolved", "resolved"]);
+        expect(closed.threads.find((thread) => thread.id === suggested)?.suggestion?.status).toBe(
+            "rejected",
+        );
+        expect(bytes().equals(original)).toBe(true);
+
+        expect(await agent.watchOnce(5_000)).toEqual({
+            form: "compact",
+            groups: [{ reason: "approved", ids: [] }],
+        });
+        expect(lastStdout(agent, "watch")).toBe("approved\n");
+        expect(byteLength(lastStdout(agent, "watch"))).toBeLessThanOrEqual(budget.watch);
+        // Unchanged right after the verdict: the daemon and the CLI hash the same source.
+        await agent.pending();
+        expect(lastStdout(agent, "pending")).toBe("approved\n");
+
+        const phrase = QUOTES[1]!;
+        const at = closed.source.indexOf(phrase);
+        const start = closed.source.lastIndexOf("\n", at) + 1;
+        const before = closed.source.slice(start, closed.source.indexOf("\n", at));
+        const after = before.replace(phrase, "one request in forty");
+        const saved = await tab.post("save", { start, before, after, version: closed.version });
+        expect(saved).toMatchObject({ ok: true });
+        expect(bytes().equals(spliced(original, [before, after]))).toBe(true);
+        expect(await agent.watchOnce(NO_WAKE_MS)).toBeUndefined();
+        const changed = await agent.pending();
+        expect(changed.review).toEqual({ verdict: "approved", changed: true });
+        expect(lastStdout(agent, "pending").split("\n")[0]).toBe("approved changed");
+        expect(changed.edits).toHaveLength(1);
+        expect((await tab.snapshot()).verdict).toMatchObject({ state: "approved" });
+
+        const fresh = await tab.comment(QUOTES[4]!, "One more thing.");
+        expect((await tab.snapshot()).verdict).toMatchObject({ state: "open" });
+        const batch = await agent.handleBatch(() => ({ reply: "Done.", resolve: true }), 5_000);
+        expect(batch?.line.groups).toMatchObject([
+            { reason: "reopened", ids: [] },
+            { reason: "new", ids: [fresh] },
+        ]);
+        expect(lastStdout(agent, "watch").startsWith(`reopened | new ${fresh} `)).toBe(true);
+        expect(lastStdout(agent, "pending").split("\n")[0]).toBe("reopened");
+        expect(batch?.tasks.map((task) => task.id)).toEqual([fresh]);
+        expect(await agent.pending()).toEqual({ threads: [], edits: [] });
+    });
+
+    test("finish: the suggestion is accepted, the rest go to the agent; then approve with a note", async () => {
+        const { doc, tab, agent, original, bytes } = await world();
+        const quote = QUOTES[0]!;
+        const replace = "six nodes to twenty-two (see the capacity log)";
+        const suggested = await tab.comment(quote, "Say where this is recorded.");
+        await agent.handleBatch(() => ({ suggest: replace }), 5_000);
+        const open = await tab.comment(QUOTES[2]!, "Which tile size is this?");
+        await tab.post("hold", { on: true });
+        const draft = await tab.comment(QUOTES[5]!, "Name the hash function.");
+        expect((await tab.thread(draft))?.state).toBe("draft");
+        expect(bytes().equals(original)).toBe(true);
+
+        const finished = await tab.post("finish", {});
+        expect(finished).toMatchObject({ ids: [open, draft], unapplied: [] });
+        expect(finished.seq).toBeGreaterThan(0);
+        expect(bytes().equals(spliced(original, [quote, replace]))).toBe(true);
+        const handed = await tab.snapshot();
+        expect(handed.finish?.ids).toEqual([open, draft]);
+        expect(handed.threads.map((thread) => [thread.id, thread.state])).toEqual([
+            [suggested, "resolved"],
+            [open, "open"],
+            [draft, "open"],
+        ]);
+
+        const batch = await agent.handleBatch(() => ({ reply: "Done.", resolve: true }), 5_000);
+        expect(batch?.line).toEqual({
+            form: "compact",
+            groups: [{ reason: "finish", ids: [open, draft] }],
+        });
+        expect(lastStdout(agent, "watch")).toBe(`finish ${open} ${draft}\n`);
+        expect(byteLength(lastStdout(agent, "watch"))).toBeLessThanOrEqual(budget.watch);
+        expect(lastStdout(agent, "pending").split("\n")[0]).toBe("finish");
+        expect(batch?.tasks.map((task) => task.id)).toEqual([open, draft]);
+        expect(batch?.acks).toEqual([`ok ${open} resolved`, `ok ${draft} resolved`]);
+
+        await threadAfterSync(tab, draft, "resolved");
+        const settled = await tab.snapshot();
+        expect(settled.threads.map((thread) => thread.state)).toEqual([
+            "resolved",
+            "resolved",
+            "resolved",
+        ]);
+        await agent.pending();
+        expect(lastStdout(agent, "pending")).toBe("none\n");
+
+        const wait = ["pending", doc, "--wait"];
+        const idle = await agent.margin(wait, "", AbortSignal.timeout(NO_WAKE_MS));
+        expect(idle.stdout).toBe("");
+        const woken = agent.margin(wait, "", AbortSignal.timeout(5_000));
+        expect(
+            await tab.post("verdict", { state: "approved", note: "  Ship it.\n  Thanks.  " }),
+        ).toMatchObject({ ok: true });
+        expect((await woken).stdout).toBe("approved: Ship it. Thanks.\n");
+        expect(await agent.watchOnce(5_000)).toEqual({
+            form: "compact",
+            groups: [{ reason: "approved", ids: [] }],
+        });
+        expect((await tab.snapshot()).verdict).toMatchObject({
+            state: "approved",
+            note: "Ship it. Thanks.",
+        });
+        expect(bytes().equals(spliced(original, [quote, replace]))).toBe(true);
+    });
+
+    test("finish with two overlapping suggestions applies the first and leaves the second pending", async () => {
+        const { tab, agent, original, bytes } = await world();
+        const [first, second] = ["six nodes to twenty-two", "twenty-two over the spring"];
+        const replacements = new Map([
+            [first, "six nodes to thirty"],
+            [second, "twenty-two over the summer"],
+        ]);
+        const ids = [
+            await tab.comment(first, "Check the count."),
+            await tab.comment(second, "Check the season."),
+        ];
+        const batch = await agent.handleBatch(
+            (task) => ({ suggest: replacements.get(task.quote)! }),
+            5_000,
+        );
+        expect(batch?.acks).toEqual(ids.map((id) => `ok ${id} replied`));
+
+        expect(await tab.post("finish", {})).toMatchObject({
+            ids: [ids[1]],
+            unapplied: [ids[1]],
+        });
+        expect(bytes().equals(spliced(original, [first, replacements.get(first)!]))).toBe(true);
+        expect((await tab.thread(ids[0]!))?.state).toBe("resolved");
+        const left = await tab.thread(ids[1]!);
+        expect(left?.state).toBe("open");
+        expect(left?.suggestion).toMatchObject({
+            status: "pending",
+            replace: replacements.get(second)!,
+        });
+
+        expect(await agent.watchOnce(5_000)).toEqual({
+            form: "compact",
+            groups: [{ reason: "finish", ids: [ids[1]!] }],
+        });
+        const pending = await agent.pending();
+        expect(pending.review).toEqual({ finish: true });
+        expect(pending.threads.map((thread) => thread.id)).toEqual([ids[1]!]);
+    });
+
+    test("drop with a thread open tells the agent and leaves the thread alone", async () => {
+        const { tab, agent, original, bytes } = await world();
+        const id = await tab.comment(QUOTES[3]!, "Is this retention right?");
+        expect(await agent.watchOnce(5_000)).toMatchObject({
+            groups: [{ reason: "new", ids: [id] }],
+        });
+        const before = await tab.thread(id);
+        expect(before?.state).toBe("open");
+
+        expect(await tab.post("verdict", { state: DROPPED })).toMatchObject({ ok: true });
+        expect(await agent.watchOnce(5_000)).toEqual({
+            form: "compact",
+            groups: [{ reason: DROPPED, ids: [] }],
+        });
+        expect(lastStdout(agent, "watch")).toBe(`${DROPPED}\n`);
+        const snapshot = await tab.snapshot();
+        expect(snapshot.verdict).toMatchObject({ state: DROPPED });
+        // The watch above stamped the thread as notified; the daemon may fold that only now.
+        expect(snapshot.threads).toEqual([{ ...before!, notifiedAt: expect.any(String) }]);
+        expect(bytes().equals(original)).toBe(true);
+
+        const pending = await agent.pending();
+        expect(pending.review).toEqual({ verdict: DROPPED });
+        expect(lastStdout(agent, "pending").split("\n")[0]).toBe(DROPPED);
+        expect(pending.threads.map((thread) => thread.id)).toEqual([id]);
     });
 });
