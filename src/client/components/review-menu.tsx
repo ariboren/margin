@@ -137,8 +137,6 @@ interface ReviewMenuProps {
     first: ThreadId | undefined;
     /** No agent is watching the doc, so a finish request would wait for one. */
     agentAway: boolean;
-    /** The bar is also showing the detached action, so the control gives up its words sooner. */
-    crowded: boolean;
     onSelectThread: (id: ThreadId) => void;
 }
 
@@ -402,11 +400,7 @@ export function ReviewMenu(props: ReviewMenuProps): JSX.Element {
     };
 
     return (
-        <span
-            class={props.crowded ? "review review-crowded" : "review"}
-            ref={root}
-            onKeyDown={onKeyDown}
-        >
+        <span class="review" ref={root} onKeyDown={onKeyDown}>
             <button
                 type="button"
                 class={`review-toggle review-${label.tone}`}

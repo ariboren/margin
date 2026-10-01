@@ -731,16 +731,24 @@
         }
     }
 
+    /* Up to 520 px the bar is full once the detached action shows, with the doc name already down
+       to a letter. The control comes back when the detached threads are resolved, one tap away. */
+    @media (max-width: 520px) {
+        .topbar-crowded .review {
+            display: none;
+        }
+    }
+
     /* The detached action takes the room the first word had. */
     @media (min-width: 721px) and (max-width: 900px) {
-        .review-crowded .review-toggle {
+        .topbar-crowded .review-toggle {
             min-width: 30px;
             height: 30px;
             justify-content: center;
             padding: 0 7px;
         }
 
-        .review-crowded .review-lead {
+        .topbar-crowded .review-lead {
             position: absolute;
             width: 1px;
             height: 1px;

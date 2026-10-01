@@ -44,12 +44,14 @@ interface TopBarProps {
 export function TopBar(props: TopBarProps): JSX.Element {
     const { store, snapshot, prefs } = props;
     const drafts = snapshot.threads.filter((thread) => thread.state === "draft").length;
+    // The detached action takes the room the review control's words had.
+    const crowded = snapshot.threads.some(isDetached);
     const liveTip = snapshot.settings.hold
         ? "Turn on so your agent receives your comments as you send them"
         : "Turn off to queue comments and send them as a batch when you're ready";
     return (
         <>
-            <header class="topbar">
+            <header class={crowded ? "topbar topbar-crowded" : "topbar"}>
                 <div class="topbar-start">
                     <OutlineButton
                         inDrawer={props.outlineInDrawer}
@@ -73,7 +75,6 @@ export function TopBar(props: TopBarProps): JSX.Element {
                         now={props.now}
                         first={props.firstUnresolved}
                         agentAway={props.chip.kind === "none" || props.chip.kind === "disconnected"}
-                        crowded={snapshot.threads.some(isDetached)}
                         onSelectThread={props.onSelectThread}
                     />
                     <span class="hold">
