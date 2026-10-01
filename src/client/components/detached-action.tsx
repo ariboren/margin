@@ -2,7 +2,6 @@ import type { JSX } from "preact";
 import { useState } from "preact/hooks";
 import type { DocSnapshot, DocStore } from "../../core/model.ts";
 import type { UndoStack } from "../undo.ts";
-import { useMedia } from "../use-media.ts";
 import { isDetached } from "../view-model.ts";
 import { Tooltip } from "./tooltip.tsx";
 
@@ -11,14 +10,24 @@ interface DetachedActionProps {
     snapshot: DocSnapshot;
     /** One undo takes the whole batch back; without a stack the resolves are not recorded. */
     undo: UndoStack | null;
+    /** A tight bar shows "N detached"; the full label stays the name and the tooltip. */
+    short: boolean;
+}
+
+export function detachedLabel(count: number): string {
+    return `Resolve ${count} detached ${count === 1 ? "thread" : "threads"}`;
 }
 
 /**
  * "Resolve N detached threads", shown while any exist: after a rewrite leaves threads with no
  * text to point at, they go in one click and come back with one undo.
  */
-export function DetachedAction({ store, snapshot, undo }: DetachedActionProps): JSX.Element | null {
-    const compact = useMedia("(max-width: 720px)");
+export function DetachedAction({
+    store,
+    snapshot,
+    undo,
+    short,
+}: DetachedActionProps): JSX.Element | null {
     const [busy, setBusy] = useState(false);
     const detached = snapshot.threads.filter(isDetached);
     if (detached.length === 0) {
@@ -26,7 +35,7 @@ export function DetachedAction({ store, snapshot, undo }: DetachedActionProps): 
     }
     const count = detached.length;
     const noun = count === 1 ? "thread" : "threads";
-    const label = `Resolve ${count} detached ${noun}`;
+    const label = detachedLabel(count);
     const resolveAll = async () => {
         setBusy(true);
         const run = async () => {
@@ -50,9 +59,9 @@ export function DetachedAction({ store, snapshot, undo }: DetachedActionProps): 
             disabled={busy}
             onClick={() => void resolveAll()}
         >
-            {compact ? `Resolve ${count} detached` : label}
+            {short ? `${count} detached` : label}
         </button>
     );
-    // The tip carries the words the compact label drops; the full label needs none.
-    return compact ? <Tooltip text={label}>{() => button}</Tooltip> : button;
+    // The tip carries the words the short label drops; the full label needs none.
+    return short ? <Tooltip text={label}>{() => button}</Tooltip> : button;
 }

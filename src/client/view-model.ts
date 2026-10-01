@@ -301,8 +301,12 @@ export interface ReviewModel {
     counts: Record<UnresolvedKind, number>;
     /** An approved doc whose text is no longer what was approved. Nothing depends on a declined doc's text. */
     changed: boolean;
-    /** The finish request on an open doc: how many threads it handed over, how many are left. */
-    finish?: { total: number; remaining: number };
+    /**
+     * The finish request on an open doc: how many threads it handed over, how many of those are
+     * still unresolved, and how many of those the agent still has (open or working). One it
+     * answered without resolving is unresolved but waits on the user.
+     */
+    finish?: { total: number; remaining: number; waiting: number };
     /** What a finish request would do now: suggestions margin accepts, threads the agent gets. */
     accepts: number;
     hands: number;
@@ -317,6 +321,11 @@ export function reviewModel(snapshot: DocSnapshot, hash: string): ReviewModel {
         counts[unresolvedKind(thread)] += 1;
     }
     const ids = new Set(unresolved.map((thread) => thread.id));
+    const withAgent = new Set(
+        unresolved
+            .filter((thread) => thread.state === "open" || thread.state === "working")
+            .map((thread) => thread.id),
+    );
     const { verdict, finish } = snapshot;
     return {
         state,
@@ -329,6 +338,7 @@ export function reviewModel(snapshot: DocSnapshot, hash: string): ReviewModel {
                   finish: {
                       total: finish.ids.length,
                       remaining: finish.ids.filter((id) => ids.has(id)).length,
+                      waiting: finish.ids.filter((id) => withAgent.has(id)).length,
                   },
               }
             : {}),
@@ -338,7 +348,7 @@ export function reviewModel(snapshot: DocSnapshot, hash: string): ReviewModel {
 }
 
 /**
- * Where "step through them" starts: the first thread in document order, else the oldest
+ * Where "Review one by one" starts: the first thread in document order, else the oldest
  * unresolved doc note, which has no place in that order.
  */
 export function firstUnresolved(view: DocView, threads: readonly Thread[]): ThreadId | undefined {

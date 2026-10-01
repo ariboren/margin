@@ -32,13 +32,14 @@ export function reviewLabel(model: ReviewModel): ReviewLabel {
     if (model.state === "declined") {
         return { tone: "declined", lead: "Declined", rest: "" };
     }
-    const remaining = model.finish?.remaining ?? 0;
-    if (remaining > 0) {
+    // Only threads the agent still has: one it answered without resolving waits on the user.
+    const waiting = model.finish?.waiting ?? 0;
+    if (waiting > 0) {
         return {
             tone: "finishing",
-            lead: "Finishing",
-            rest: `, ${remaining} left`,
-            badge: String(remaining),
+            lead: "Resolving",
+            rest: `, ${waiting} left`,
+            badge: String(waiting),
         };
     }
     if (model.finish && model.unresolved.length === 0) {
@@ -56,7 +57,7 @@ function count(n: number, one: string, many = `${one}s`): string {
 }
 
 const kindLine: Record<UnresolvedKind, (n: number) => string> = {
-    agent: (n) => `${count(n, "comment")} waiting on your agent`,
+    agent: (n) => `${count(n, "comment")} waiting on agent`,
     user: (n) => `${count(n, "agent reply", "agent replies")} waiting on you`,
     suggestion: (n) => count(n, "pending suggestion"),
     draft: (n) => count(n, "held draft"),
@@ -80,13 +81,13 @@ export function unresolvedSubhead(total: number): string {
 export function finishOutcome(accepted: number, handed: number): string {
     const parts = [
         ...(accepted > 0 ? [`Accepted ${count(accepted, "suggestion")}.`] : []),
-        ...(handed > 0 ? [`Sent ${count(handed, "thread")} to your agent.`] : []),
+        ...(handed > 0 ? [`Sent ${count(handed, "thread")} to agent.`] : []),
     ];
     return parts.length > 0 ? parts.join(" ") : "Nothing was left to send.";
 }
 
 export function unappliedLine(n: number): string {
-    return `${count(n, "suggestion")} could not be applied and went to your agent`;
+    return `${count(n, "suggestion")} could not be applied and went to agent`;
 }
 
 export function asIsWarning(total: number): string {
@@ -94,7 +95,7 @@ export function asIsWarning(total: number): string {
 }
 
 /**
- * Whether "Let the agent resolve" is offered. Asking again does nothing while every unresolved
+ * Whether "Let agent resolve" is offered. Asking again does nothing while every unresolved
  * thread is already the agent's to finish; the path comes back once one is waiting on the user,
  * held, or new.
  */
@@ -116,39 +117,24 @@ export interface VerdictAction {
 
 /**
  * The verdict buttons in the order they show and take focus: the positive or primary one first,
- * as a thread card puts Accept before Reject. A declined doc only reopens; approving is done from
- * the open state, where Approve keeps its place but is disabled while threads are unresolved.
+ * as a thread card puts Accept before Reject. A doc with a verdict only reopens; approving and
+ * declining are done from the open state, where Approve keeps its place but is disabled while
+ * threads are unresolved.
  */
 export function verdictActions(model: ReviewModel): VerdictAction[] {
-    const reopen: VerdictAction = {
-        label: "Reopen",
-        state: "open",
-        icon: "reopen",
-        look: "primary",
-    };
-    const decline = (label: string): VerdictAction => ({
-        label,
-        state: "declined",
-        icon: "slash",
-        look: "danger",
-    });
-    switch (model.state) {
-        case "approved":
-            return [reopen, decline("Decline instead")];
-        case "declined":
-            return [reopen];
-        case "open":
-            return [
-                {
-                    label: "Approve",
-                    state: "approved",
-                    icon: "check",
-                    look: "accept",
-                    ...(model.unresolved.length > 0 ? { disabled: true as const } : {}),
-                },
-                decline("Decline"),
-            ];
+    if (model.state !== "open") {
+        return [{ label: "Reopen", state: "open", icon: "reopen", look: "primary" }];
     }
+    return [
+        {
+            label: "Approve",
+            state: "approved",
+            icon: "check",
+            look: "accept",
+            ...(model.unresolved.length > 0 ? { disabled: true as const } : {}),
+        },
+        { label: "Decline", state: "declined", icon: "slash", look: "danger" },
+    ];
 }
 
 /** The line that says why Approve is disabled; the button points at it. */
@@ -276,8 +262,8 @@ export function ReviewMenu(props: ReviewMenuProps): JSX.Element {
         <textarea
             class="review-note"
             rows={2}
-            aria-label="Note for your agent (optional)"
-            placeholder="Note for your agent (optional)"
+            aria-label="Note for agent (optional)"
+            placeholder="Note for agent (optional)"
             maxLength={NOTE_MAX}
             value={note}
             onInput={(event) => setNote(event.currentTarget.value)}
@@ -360,7 +346,7 @@ export function ReviewMenu(props: ReviewMenuProps): JSX.Element {
                     {refused}
                     <div class="review-intro">
                         <p class="review-head">Add your review decision</p>
-                        <p class="review-line">All threads are resolved or closed.</p>
+                        <p class="review-line">All threads are resolved or closed</p>
                     </div>
                     {noteField}
                     <VerdictButtons
@@ -389,7 +375,7 @@ export function ReviewMenu(props: ReviewMenuProps): JSX.Element {
                 <div class="review-paths">
                     <Path
                         title="Approve as-is"
-                        detail="Pending threads are left unactioned"
+                        detail="Open threads are closed without action"
                         onClick={() => setPanel({ kind: "confirm" })}
                     />
                     {first ? (
@@ -405,7 +391,7 @@ export function ReviewMenu(props: ReviewMenuProps): JSX.Element {
                     ) : null}
                     {canAskToFinish(model) ? (
                         <Path
-                            title="Let the agent resolve"
+                            title="Let agent resolve"
                             detail="They'll apply your feedback before you approve"
                             quiet={
                                 props.agentAway

@@ -766,47 +766,6 @@
         }
     }
 
-    /* Up to 600 px the bar is full once the detached action shows, with the doc name already down
-       to a letter. The control comes back when the detached threads are resolved, one tap away. */
-    @media (max-width: 600px) {
-        .topbar-crowded .review {
-            display: none;
-        }
-    }
-
-    /* "Send all (N)" fills a bar this narrow the same way. */
-    @media (max-width: 440px) {
-        .topbar-holding .review {
-            display: none;
-        }
-    }
-
-    /* Both at once fill a bar up to 840 px. */
-    @media (max-width: 840px) {
-        .topbar-crowded.topbar-holding .review {
-            display: none;
-        }
-    }
-
-    /* The detached action takes the room the first word had. */
-    @media (min-width: 721px) and (max-width: 900px) {
-        .topbar-crowded .review-toggle {
-            min-width: 30px;
-            height: 30px;
-            justify-content: center;
-            padding: 0 7px;
-        }
-
-        .topbar-crowded .review-lead {
-            position: absolute;
-            width: 1px;
-            height: 1px;
-            overflow: hidden;
-            clip-path: inset(50%);
-            white-space: nowrap;
-        }
-    }
-
     .setting-row {
         display: flex;
         align-items: center;

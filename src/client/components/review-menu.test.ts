@@ -52,23 +52,47 @@ describe("reviewLabel", () => {
         });
     });
 
-    test("a finish request counts down, then reads ready once nothing is unresolved", () => {
-        const finishing = model({ unresolved: ["c1", "c2"], finish: { total: 3, remaining: 2 } });
-        expect(reviewLabel(finishing)).toEqual({
+    test("a finish request counts down the threads the agent still has", () => {
+        const resolving = model({
+            unresolved: ["c1", "c2"],
+            finish: { total: 3, remaining: 2, waiting: 2 },
+        });
+        expect(reviewLabel(resolving)).toEqual({
             tone: "finishing",
-            lead: "Finishing",
+            lead: "Resolving",
             rest: ", 2 left",
             badge: "2",
         });
-        expect(reviewLabel(model({ finish: { total: 3, remaining: 0 } }))).toEqual({
+        const answered = model({
+            unresolved: ["c1", "c2"],
+            finish: { total: 3, remaining: 2, waiting: 1 },
+        });
+        expect(text(answered)).toBe("Resolving, 1 left");
+    });
+
+    test("a handed thread the agent answered without resolving puts the label back to Review", () => {
+        const waitingOnUser = {
+            unresolved: ["c1" as const],
+            finish: { total: 3, remaining: 1, waiting: 0 },
+        };
+        expect(reviewLabel(model(waitingOnUser))).toEqual({
+            tone: "open",
+            lead: "Review",
+            rest: "",
+        });
+    });
+
+    test("ready to approve only once nothing is unresolved", () => {
+        expect(reviewLabel(model({ finish: { total: 3, remaining: 0, waiting: 0 } }))).toEqual({
             tone: "ready",
             lead: "Ready",
             rest: " to approve",
         });
-    });
-
-    test("a settled finish request with newer threads unresolved is back to Review", () => {
-        expect(text({ unresolved: ["c7"], finish: { total: 3, remaining: 0 } })).toBe("Review");
+        const newer = {
+            unresolved: ["c7" as const],
+            finish: { total: 3, remaining: 0, waiting: 0 },
+        };
+        expect(text(newer)).toBe("Review");
     });
 });
 
@@ -92,28 +116,23 @@ describe("verdictActions", () => {
             verdictActions(model(change)).map((action) => action.disabled ?? false);
         expect(disabled({ unresolved: ["c1"] })).toEqual([true, false]);
         expect(disabled({})).toEqual([false, false]);
-        expect(disabled({ state: "approved" })).toEqual([false, false]);
+        expect(disabled({ state: "approved" })).toEqual([false]);
     });
 
-    test("an approved doc reopens first, then declines", () => {
-        expect(shown({ state: "approved" })).toEqual([
-            ["Reopen", "open", "primary"],
-            ["Decline instead", "declined", "danger"],
-        ]);
-    });
-
-    test("a declined doc only reopens, with or without threads unresolved", () => {
-        expect(shown({ state: "declined" })).toEqual([["Reopen", "open", "primary"]]);
-        expect(shown({ state: "declined", unresolved: ["c1", "c2"] })).toEqual([
-            ["Reopen", "open", "primary"],
-        ]);
+    test("a doc with a verdict only reopens, with or without threads unresolved", () => {
+        for (const state of ["approved", "declined"] as const) {
+            expect(shown({ state })).toEqual([["Reopen", "open", "primary"]]);
+            expect(shown({ state, unresolved: ["c1", "c2"] })).toEqual([
+                ["Reopen", "open", "primary"],
+            ]);
+        }
     });
 
     test("every button carries an icon that matches what it does", () => {
         const icons = (change: Partial<ReviewModel>) =>
             verdictActions(model(change)).map((action) => action.icon);
         expect(icons({})).toEqual(["check", "slash"]);
-        expect(icons({ state: "approved" })).toEqual(["reopen", "slash"]);
+        expect(icons({ state: "approved" })).toEqual(["reopen"]);
         expect(icons({ state: "declined" })).toEqual(["reopen"]);
     });
 });
@@ -121,13 +140,13 @@ describe("verdictActions", () => {
 describe("popover copy", () => {
     test("only the kinds present, singular and plural", () => {
         expect(kindLines({ agent: 2, user: 1, suggestion: 1, draft: 1 })).toEqual([
-            "2 comments waiting on your agent",
+            "2 comments waiting on agent",
             "1 agent reply waiting on you",
             "1 pending suggestion",
             "1 held draft",
         ]);
         expect(kindLines({ agent: 1, user: 3, suggestion: 0, draft: 2 })).toEqual([
-            "1 comment waiting on your agent",
+            "1 comment waiting on agent",
             "3 agent replies waiting on you",
             "2 held drafts",
         ]);
@@ -151,12 +170,12 @@ describe("popover copy", () => {
     });
 
     test("the finish outcome follows the numbers too", () => {
-        expect(finishOutcome(1, 4)).toBe("Accepted 1 suggestion. Sent 4 threads to your agent.");
-        expect(finishOutcome(0, 1)).toBe("Sent 1 thread to your agent.");
+        expect(finishOutcome(1, 4)).toBe("Accepted 1 suggestion. Sent 4 threads to agent.");
+        expect(finishOutcome(0, 1)).toBe("Sent 1 thread to agent.");
         expect(finishOutcome(2, 0)).toBe("Accepted 2 suggestions.");
         expect(finishOutcome(0, 0)).toBe("Nothing was left to send.");
-        expect(unappliedLine(1)).toBe("1 suggestion could not be applied and went to your agent");
-        expect(unappliedLine(2)).toBe("2 suggestions could not be applied and went to your agent");
+        expect(unappliedLine(1)).toBe("1 suggestion could not be applied and went to agent");
+        expect(unappliedLine(2)).toBe("2 suggestions could not be applied and went to agent");
     });
 
     test("asking to finish is offered until the agent already has every thread", () => {
@@ -164,7 +183,7 @@ describe("popover copy", () => {
         const handed: Partial<ReviewModel> = {
             unresolved: ["c1", "c2"],
             counts,
-            finish: { total: 2, remaining: 2 },
+            finish: { total: 2, remaining: 2, waiting: 2 },
         };
         expect(canAskToFinish(model({ unresolved: ["c1", "c2"], counts }))).toBe(true);
         expect(canAskToFinish(model(handed))).toBe(false);
@@ -214,9 +233,11 @@ describe("against the store", () => {
         const preview = read(store);
         const result = await store.requestFinish();
         expect(result.ids).toHaveLength(preview.hands);
-        expect(label()).toBe("Finishing, 2 left");
+        expect(label()).toBe("Resolving, 2 left");
         store.agentResolve(first);
-        expect(label()).toBe("Finishing, 1 left");
+        expect(label()).toBe("Resolving, 1 left");
+        store.agentReply(second, "Which one do you mean?");
+        expect(label()).toBe("Review");
         store.agentResolve(second);
         expect(label()).toBe("Ready to approve");
 

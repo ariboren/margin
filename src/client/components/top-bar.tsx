@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type { DocSnapshot, DocStore, ThreadId } from "../../core/model.ts";
 import type { EditOn, Scale, ViewPrefs } from "../preferences.ts";
 import { describeEntry, type UndoStack } from "../undo.ts";
+import { useMedia } from "../use-media.ts";
 import { isDetached } from "../view-model.ts";
 import { AgentChip, type AgentChipModel } from "./agent-chip.tsx";
 import { DetachedAction } from "./detached-action.tsx";
@@ -44,17 +45,26 @@ interface TopBarProps {
 export function TopBar(props: TopBarProps): JSX.Element {
     const { store, snapshot, prefs } = props;
     const drafts = snapshot.threads.filter((thread) => thread.state === "draft").length;
-    // The detached action takes the room the review control's words had.
-    const crowded = snapshot.threads.some(isDetached);
-    const barClass = ["topbar", crowded ? "topbar-crowded" : "", drafts > 0 ? "topbar-holding" : ""]
-        .filter(Boolean)
-        .join(" ");
+    const short = useMedia(
+        shortLabelsBelow({ detached: snapshot.threads.some(isDetached), drafts: drafts > 0 }),
+    );
+    const sendLabel = `Send all (${drafts})`;
+    const sendButton = (
+        <button
+            type="button"
+            class="button"
+            aria-label={sendLabel}
+            onClick={() => void store.sendAll()}
+        >
+            {short ? `Send (${drafts})` : sendLabel}
+        </button>
+    );
     const liveTip = snapshot.settings.hold
         ? "Turn on so your agent receives your comments as you send them"
         : "Turn off to queue comments and send them as a batch when you're ready";
     return (
         <>
-            <header class={barClass}>
+            <header class="topbar">
                 <div class="topbar-start">
                     <OutlineButton
                         inDrawer={props.outlineInDrawer}
@@ -70,7 +80,12 @@ export function TopBar(props: TopBarProps): JSX.Element {
                     />
                 </div>
                 <div class="topbar-end">
-                    <DetachedAction store={store} snapshot={snapshot} undo={props.undo} />
+                    <DetachedAction
+                        store={store}
+                        snapshot={snapshot}
+                        undo={props.undo}
+                        short={short}
+                    />
                     {props.undo ? <UndoButtons stack={props.undo} /> : null}
                     <span class="hold">
                         <Tooltip text={liveTip}>
@@ -88,15 +103,11 @@ export function TopBar(props: TopBarProps): JSX.Element {
                                 </label>
                             )}
                         </Tooltip>
-                        {drafts > 0 ? (
-                            <button
-                                type="button"
-                                class="button"
-                                onClick={() => void store.sendAll()}
-                            >
-                                Send all ({drafts})
-                            </button>
-                        ) : null}
+                        {drafts === 0 ? null : short ? (
+                            <Tooltip text={sendLabel}>{() => sendButton}</Tooltip>
+                        ) : (
+                            sendButton
+                        )}
                     </span>
                     <ReviewMenu
                         store={store}
@@ -158,6 +169,17 @@ export function TopBar(props: TopBarProps): JSX.Element {
             <RequestToast problem={props.problem} />
         </>
     );
+}
+
+/**
+ * The media query under which the bar's two wide buttons take their short labels ("N detached",
+ * "Send (N)"). Each width is the narrowest bar that still holds the full labels beside the review
+ * control without shortening the doc name, as measured in the mockup: the detached action alone,
+ * "Send all" alone, and both together.
+ */
+export function shortLabelsBelow(showing: { detached: boolean; drafts: boolean }): string {
+    const width = showing.detached ? (showing.drafts ? 960 : 860) : 620;
+    return `(max-width: ${width}px)`;
 }
 
 interface IconButtonProps {

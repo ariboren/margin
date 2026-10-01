@@ -388,16 +388,17 @@ describe("reviewModel", () => {
         expect(model.verdict).toBeUndefined();
     });
 
-    test("finish progress counts the request's threads still unresolved", () => {
+    test("finish progress counts the request's threads still unresolved, and those the agent has", () => {
         const snapshot: DocSnapshot = {
-            ...snapshotWith(["open", "resolved", "open"]),
-            finish: { seq: 4, at, ids: ["c1", "c2", "c9"] },
+            ...snapshotWith(["open", "resolved", "working", "replied"]),
+            finish: { seq: 4, at, ids: ["c1", "c2", "c3", "c4", "c9"] },
         };
-        expect(reviewModel(snapshot, hash).finish).toEqual({ total: 3, remaining: 1 });
+        expect(reviewModel(snapshot, hash).finish).toEqual({ total: 5, remaining: 3, waiting: 2 });
         snapshot.threads[0]!.state = "resolved";
-        const done = reviewModel(snapshot, hash);
-        expect(done.finish).toEqual({ total: 3, remaining: 0 });
-        expect(done.unresolved).toEqual(["c3"]);
+        snapshot.threads[2]!.state = "replied";
+        const answered = reviewModel(snapshot, hash);
+        expect(answered.finish).toEqual({ total: 5, remaining: 2, waiting: 0 });
+        expect(answered.unresolved).toEqual(["c3", "c4"]);
     });
 
     test("a finish request is ignored once a verdict stands", () => {
