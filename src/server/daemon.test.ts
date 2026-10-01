@@ -12,6 +12,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { startServer, type MarginServer } from "./daemon.ts";
 import { withPresence } from "./presence.ts";
+
+const FOREMAN = { name: "foreman", client: "claude-code" } as const;
 import { BOOT_ELEMENT, routes, type PageBoot, type WireSnapshot } from "./protocol.ts";
 
 const FIXTURES = join(import.meta.dir, "..", "..", "fixtures");
@@ -145,9 +147,86 @@ describe("opening files and links", () => {
     });
 });
 
+describe("page URLs", () => {
+    const get = async (path: string, query = `?t=${server.token}`) =>
+        await fetch(`${server.origin}${path}${query}`, { redirect: "manual" });
+
+    test("carry the short id and the file name, and serve the page there", async () => {
+        const { docId, url } = await server.register(docPath("edge-crlf.md"));
+        const short = docId.slice(0, 8);
+        expect(url).toBe(`${server.origin}/d/${short}/edge-crlf.md?t=${server.token}`);
+        expect((await fetch(url, { redirect: "manual" })).status).toBe(200);
+    });
+
+    test("encode the file name", async () => {
+        const { url } = await server.register(join(root, "repo", "docs", "<", "script>.md"));
+        expect(new URL(url).pathname).toEndWith("/script%3E.md");
+        expect((await fetch(url, { redirect: "manual" })).status).toBe(200);
+    });
+
+    test("a wrong or missing file name redirects to the canonical URL, token kept", async () => {
+        const { docId, url } = await server.register(docPath("edge-crlf.md"));
+        const canonical = url.slice(server.origin.length);
+        for (const path of [
+            `/d/${docId.slice(0, 8)}/other.md`,
+            `/d/${docId.slice(0, 8)}/%E0%A4%A`,
+            `/d/${docId.slice(0, 8)}/`,
+            `/d/${docId.slice(0, 8)}`,
+            `/d/${docId}/edge-crlf.md`,
+        ]) {
+            const response = await get(path);
+            expect({ path, status: response.status }).toEqual({ path, status: 302 });
+            expect(response.headers.get("location")).toBe(canonical);
+        }
+    });
+
+    test("a legacy full-id URL redirects with its whole query", async () => {
+        const { docId, url } = await server.register(docPath("edge-crlf.md"));
+        const response = await get(`/d/${docId}`, `?t=${server.token}&x=1`);
+        expect(response.status).toBe(302);
+        expect(response.headers.get("location")).toBe(
+            `${new URL(url).pathname}?t=${server.token}&x=1`,
+        );
+    });
+
+    test("without the token nothing redirects, and the file name never leaks", async () => {
+        const { docId } = await server.register(docPath("edge-crlf.md"));
+        for (const query of ["", "?t=wrong"]) {
+            for (const path of [`/d/${docId}`, `/d/${docId.slice(0, 8)}/edge-crlf.md`]) {
+                const response = await get(path, query);
+                expect(response.status).toBe(403);
+                expect(response.headers.get("location")).toBeNull();
+            }
+        }
+    });
+
+    test("an unknown id is not found", async () => {
+        for (const path of ["/d/00000000/x.md", "/d/000000000000", "/d/000000000000/x.md"]) {
+            expect((await get(path)).status).toBe(404);
+        }
+    });
+
+    test("two docs with one name get distinct ids and each serves its own path", async () => {
+        const first = join(root, "repo", "one", "notes.md");
+        const second = join(root, "repo", "two", "notes.md");
+        for (const path of [first, second]) {
+            mkdirSync(dirname(path), { recursive: true });
+            writeFileSync(path, "# Notes\n");
+        }
+        const a = await server.register(first);
+        const b = await server.register(second);
+        expect(a.docId).not.toBe(b.docId);
+        expect(new URL(a.url).pathname).not.toBe(new URL(b.url).pathname);
+        for (const { docId, url } of [a, b]) {
+            const html = await (await fetch(url, { redirect: "manual" })).text();
+            expect(html).toContain(`"path":${JSON.stringify(server.session(docId)!.path)}`);
+        }
+    });
+});
+
 describe("page boot data", () => {
-    const bootOf = async (docId: string): Promise<{ html: string; boot: PageBoot }> => {
-        const html = await (await fetch(withToken(routes.page(docId)))).text();
+    const bootOf = async (url: string): Promise<{ html: string; boot: PageBoot }> => {
+        const html = await (await fetch(url)).text();
         const match = new RegExp(
             `<script type="application/json" id="${BOOT_ELEMENT}">(.*?)</script>`,
         ).exec(html);
@@ -155,8 +234,8 @@ describe("page boot data", () => {
     };
 
     test("carries the path and the repo-relative path", async () => {
-        const { docId } = await server.register(docPath("edge-bom.md"));
-        const { boot } = await bootOf(docId);
+        const { docId, url } = await server.register(docPath("edge-bom.md"));
+        const { boot } = await bootOf(url);
         expect(boot).toEqual({
             docId,
             path: server.session(docId)!.path,
@@ -165,8 +244,8 @@ describe("page boot data", () => {
     });
 
     test("a path cannot close the script element", async () => {
-        const { docId } = await server.register(join(root, "repo", "docs", "<", "script>.md"));
-        const { html, boot } = await bootOf(docId);
+        const { url } = await server.register(join(root, "repo", "docs", "<", "script>.md"));
+        const { html, boot } = await bootOf(url);
         expect(boot.relativePath).toBe("docs/</script>.md");
         expect(html.match(/<\/script>/g)?.length).toBe(2);
     });
@@ -177,11 +256,11 @@ describe("agent presence", () => {
         const { docId } = await server.register(docPath("edge-nonl.md"));
         const get = async () =>
             (await (await fetch(withToken(routes.snapshot(docId)))).json()) as WireSnapshot;
-        expect((await get()).agentWatching).toBe(false);
-        await withPresence(docPath("edge-nonl.md"), async () => {
-            expect((await get()).agentWatching).toBe(true);
+        expect((await get()).agents).toEqual([]);
+        await withPresence(docPath("edge-nonl.md"), FOREMAN, async () => {
+            expect((await get()).agents).toEqual([FOREMAN]);
         });
-        expect((await get()).agentWatching).toBe(false);
+        expect((await get()).agents).toEqual([]);
     });
 
     test("a presence change is pushed to open tabs without any log event", async () => {
@@ -211,13 +290,13 @@ describe("agent presence", () => {
             }
         };
         const first = await next();
-        expect(first.agentWatching).toBe(false);
-        await withPresence(docPath("edge-nonl.md"), async () => {
+        expect(first.agents).toEqual([]);
+        await withPresence(docPath("edge-nonl.md"), FOREMAN, async () => {
             const pushed = await next();
-            expect(pushed.agentWatching).toBe(true);
+            expect(pushed.agents).toEqual([FOREMAN]);
             expect(pushed.version).toBe(first.version);
         });
-        expect((await next()).agentWatching).toBe(false);
+        expect((await next()).agents).toEqual([]);
         abort.abort();
     });
 });
@@ -239,6 +318,121 @@ describe("client bundle", () => {
         } finally {
             await bare.stop();
             rmSync(empty, { recursive: true, force: true });
+        }
+    });
+});
+
+describe("dev reload", () => {
+    const blocks = async function* (response: Response): AsyncGenerator<string> {
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+            const end = buffer.indexOf("\n\n");
+            if (end >= 0) {
+                yield buffer.slice(0, end);
+                buffer = buffer.slice(end + 2);
+                continue;
+            }
+            const { value, done } = await reader.read();
+            if (done) {
+                return;
+            }
+            buffer += decoder.decode(value, { stream: true });
+        }
+    };
+    const firstSnapshot = async (stream: AsyncGenerator<string>): Promise<string[]> => {
+        // Not `for await`: leaving that loop early would close the stream.
+        const seen: string[] = [];
+        while (true) {
+            const { value, done } = await stream.next();
+            if (done) {
+                throw new Error("stream ended");
+            }
+            seen.push(value);
+            if (value.startsWith("event: snapshot")) {
+                return seen;
+            }
+        }
+    };
+    const devData = (seen: string[]) =>
+        seen
+            .filter((block) => block.startsWith("event: dev\n"))
+            .map((block) => block.split("\n")[1]);
+
+    test("a normal server sends no dev stamp and reload does nothing", async () => {
+        const { docId } = await server.register(docPath("edge-bom.md"));
+        const abort = new AbortController();
+        const response = await fetch(withToken(routes.events(docId)), { signal: abort.signal });
+        const stream = blocks(response);
+        server.reload();
+        expect(devData(await firstSnapshot(stream))).toEqual([]);
+        abort.abort();
+    });
+
+    test("a dev server stamps each stream and reload changes the stamp", async () => {
+        const dev = await startServer({ dev: true, port: 0 });
+        try {
+            const { docId } = await dev.register(docPath("edge-bom.md"));
+            const abort = new AbortController();
+            const response = await fetch(`${dev.origin}${routes.events(docId)}?t=${dev.token}`, {
+                signal: abort.signal,
+            });
+            const stream = blocks(response);
+            const [before] = devData(await firstSnapshot(stream));
+            expect(before).toMatch(/^data: \S+$/);
+            dev.reload();
+            const [after] = devData(await firstSnapshot(stream));
+            expect(after).toMatch(/^data: \S+$/);
+            expect(after).not.toBe(before);
+            abort.abort();
+        } finally {
+            await dev.stop();
+        }
+    });
+});
+
+describe("idle exit", () => {
+    const ping = async (idle: MarginServer, headers: Record<string, string>, status: number) => {
+        const until = Date.now() + 600;
+        while (Date.now() < until) {
+            const response = await fetch(`${idle.origin}${routes.status}`, { headers });
+            expect(response.status).toBe(status);
+            await Bun.sleep(40);
+        }
+    };
+
+    test("unauthenticated requests do not keep the daemon alive", async () => {
+        let fired = 0;
+        const idle = await startServer({
+            idleMs: 200,
+            onIdle: () => {
+                fired++;
+            },
+        });
+        try {
+            await ping(idle, {}, 403);
+            expect(fired).toBeGreaterThanOrEqual(1);
+        } finally {
+            await idle.stop();
+        }
+    });
+
+    test("authenticated requests do", async () => {
+        let fired = 0;
+        const idle = await startServer({
+            idleMs: 200,
+            onIdle: () => {
+                fired++;
+            },
+        });
+        try {
+            await ping(idle, { authorization: `Bearer ${idle.token}` }, 200);
+            expect(fired).toBe(0);
+            await Bun.sleep(400);
+            expect(fired).toBeGreaterThanOrEqual(1);
+        } finally {
+            await idle.stop();
         }
     });
 });

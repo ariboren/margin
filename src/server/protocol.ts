@@ -6,6 +6,7 @@
 // snapshot, so a reconnect never has to replay a gap.
 
 import type {
+    AgentIdentity,
     Anchor,
     DocSettingKey,
     DocSettings,
@@ -28,11 +29,22 @@ export const TOKEN_PARAM = "t";
 export const TOKEN_META = "margin-token";
 export const DOC_META = "margin-doc";
 
-/** Short id for a registered doc: stable per real path. */
+/** Id for a registered doc: 12 hex characters, stable per real path. */
 export type DocId = string;
 
+/** Hex characters of the doc id that the page URL carries. */
+export const SHORT_ID_LENGTH = 8;
+
+export function shortDocId(docId: DocId): string {
+    return docId.slice(0, SHORT_ID_LENGTH);
+}
+
 export const routes = {
-    page: (docId: DocId) => `/d/${docId}`,
+    /**
+     * The tab page. `id` is the doc id or its short prefix and is all the daemon resolves by;
+     * `name`, the doc's file name, is only there to make the URL readable.
+     */
+    page: (id: string, name: string) => `/d/${id}/${encodeURIComponent(name)}`,
     /** An image beside the doc: `path` is relative to the doc's directory. */
     asset: (docId: DocId, path: string) =>
         `/d/${docId}/asset/${path.split("/").map(encodeURIComponent).join("/")}`,
@@ -67,14 +79,18 @@ export interface WireSnapshot {
     /** Seq of the last log event folded in. Send it back with saves. */
     version: number;
     /**
-     * A `margin watch` or `pending --wait` is running on this doc now (its presence file names a
-     * live pid). Set by the daemon on every push; absent only from a bare session snapshot.
+     * The agents whose `margin watch` or `pending --wait` is running on this doc now (each
+     * presence file names a live pid). Set by the daemon on every push; absent only from a bare
+     * session snapshot.
      */
-    agentWatching?: boolean;
+    agents?: AgentIdentity[];
 }
 
 /** Id of the page's `application/json` script element holding `PageBoot`. */
 export const BOOT_ELEMENT = "margin-boot";
+
+/** Id of the page's icon link; the client swaps its href as the agent's standing changes. */
+export const ICON_ELEMENT = "margin-icon";
 
 /** What the page shell hands the client besides the token meta. */
 export interface PageBoot {
@@ -87,6 +103,9 @@ export interface PageBoot {
 
 /** SSE event name for a `WireSnapshot` payload; the SSE `id` is its `version`. */
 export const SNAPSHOT_EVENT = "snapshot";
+
+/** Sent only by a daemon run by `bun run dev`; a new value means a rebuild or restart. */
+export const DEV_EVENT = "dev";
 
 /**
  * Compare-and-swap save of one unit. With `version` (the snapshot the edit started from), the
@@ -105,23 +124,40 @@ export interface SaveRequest {
      * nothing has been added next to it.
      */
     strict?: boolean;
+    /**
+     * Seq of the logged edit this save inverts exactly (an undo, or a redo inverting the undo):
+     * logged with cause `undo`, so the page and the agent's feed fold the pair away.
+     */
+    undoes?: number;
 }
 
+/**
+ * Taking back the user's own event `seq`: refused as `seen` once the agent read it (a claim of
+ * the thread, a cursor past it that named the thread, or an agent event on it), as `conflict`
+ * when an accept's text changed since.
+ */
+export type RetractResult = { ok: true } | { ok: false; reason: "seen" | "conflict" | "missing" };
+
 export interface Mutations {
-    comment: { req: { anchor: Anchor; text: string }; res: { id: ThreadId } };
+    /** Without an anchor, a doc note. */
+    comment: { req: { anchor?: Anchor; text: string }; res: { id: ThreadId } };
     suggest: { req: { anchor: Anchor; replace: string; text?: string }; res: { id: ThreadId } };
-    reply: { req: { id: ThreadId; text: string }; res: Ok };
-    accept: { req: { id: ThreadId }; res: SaveResult };
-    reject: { req: { id: ThreadId; note?: string }; res: Ok };
-    resolve: { req: { id: ThreadId }; res: Ok };
-    reopen: { req: { id: ThreadId }; res: Ok };
+    /** `seq`: the event this appended, which `retract` can take back. */
+    reply: { req: { id: ThreadId; text: string }; res: Ok & Seq };
+    accept: { req: { id: ThreadId }; res: SaveResult & Partial<Seq> };
+    reject: { req: { id: ThreadId; note?: string }; res: Ok & Seq };
+    resolve: { req: { id: ThreadId }; res: Ok & Seq };
+    reopen: { req: { id: ThreadId }; res: Ok & Seq };
+    delete: { req: { id: ThreadId }; res: Ok };
+    undelete: { req: { id: ThreadId }; res: Ok };
+    retract: { req: { id: ThreadId; seq: number }; res: RetractResult };
     revert: { req: { id: ThreadId }; res: SaveResult };
     /** `at`: where the text landed, in the doc as of the response's `version`. */
     save: { req: SaveRequest; res: SaveResult & { at?: Offset } };
     "follow-through": { req: { editSeq: number; text: string }; res: { id: ThreadId } };
     hold: { req: { on: boolean }; res: Ok };
     "send-all": { req: Record<string, never>; res: Ok };
-    setting: { req: { key: DocSettingKey; value: boolean; id?: ThreadId }; res: Ok };
+    setting: { req: { key: DocSettingKey; value: boolean }; res: Ok };
 }
 
 export type MutationName = keyof Mutations;
@@ -140,6 +176,9 @@ export const MUTATIONS: readonly MutationName[] = [
     "reject",
     "resolve",
     "reopen",
+    "delete",
+    "undelete",
+    "retract",
     "revert",
     "save",
     "follow-through",
@@ -150,6 +189,10 @@ export const MUTATIONS: readonly MutationName[] = [
 
 export interface Ok {
     ok: true;
+}
+
+export interface Seq {
+    seq: number;
 }
 
 /** Body of any 4xx/5xx JSON response. */

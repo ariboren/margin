@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Server } from "bun";
@@ -15,16 +15,21 @@ import {
     statePaths,
     writeDaemonInfo,
 } from "./paths.ts";
-import { agentWatching } from "./presence.ts";
+import { faviconHref } from "../core/favicon.ts";
+import { connectedAgents } from "./presence.ts";
 import {
     BOOT_ELEMENT,
+    ICON_ELEMENT,
+    DEV_EVENT,
     DOC_META,
     MUTATIONS,
     PROTOCOL_VERSION,
+    SHORT_ID_LENGTH,
     SNAPSHOT_EVENT,
     TOKEN_META,
     TOKEN_PARAM,
     routes,
+    shortDocId,
     type DaemonStatus,
     type DocId,
     type ErrorBody,
@@ -81,6 +86,8 @@ export interface ServerOptions {
     openUrl?: (url: string, env: Env) => Promise<Opener>;
     /** Opens a file for `open-file`; defaults to `openFile`. */
     openFile?: (path: string, env: Env) => Promise<FileOpener>;
+    /** `bun run dev` only: every event stream also carries a stamp that `reload()` changes. */
+    dev?: boolean;
 }
 
 export interface MarginServer {
@@ -90,6 +97,8 @@ export interface MarginServer {
     register(path: string): Promise<RegisterResponse>;
     session(docId: DocId): DocSession | undefined;
     status(): DaemonStatus;
+    /** Dev only: changes the stamp so every open tab reloads. A no-op without `dev`. */
+    reload(): void;
     stop(): Promise<void>;
 }
 
@@ -97,8 +106,8 @@ interface Registered {
     session: DocSession;
     watcher: WatchHandle;
     relativePath: string;
-    /** Last presence reading pushed to this doc's tabs. */
-    watching: boolean;
+    /** Last presence reading pushed to this doc's tabs, as its JSON, so a poll compares bytes. */
+    agents: string;
     /** One resend per open event stream, for a presence change the log never sees. */
     streams: Set<() => void>;
 }
@@ -114,6 +123,9 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
     const opening = new Map<DocId, Promise<Registered>>();
     let lastActivity = Date.now();
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const boot = randomUUID();
+    let builds = 0;
+    const devStamp = options.dev ? () => `${boot}.${builds}` : undefined;
 
     const clients = () => [...docs.values()].reduce((sum, doc) => sum + doc.session.clients, 0);
 
@@ -164,7 +176,7 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
                         session,
                         watcher,
                         relativePath: repoRelativePath(real),
-                        watching: agentWatching(real),
+                        agents: JSON.stringify(connectedAgents(real)),
                         streams: new Set(),
                     };
                     docs.set(docId, entry);
@@ -175,7 +187,26 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
             }
             await open;
         }
-        return { docId, url: `${origin}${routes.page(docId)}?${TOKEN_PARAM}=${token}` };
+        return { docId, url: `${origin}${pagePath(docId)}?${TOKEN_PARAM}=${token}` };
+    };
+
+    /** The short id, unless another open doc shares it; then the full id keeps the two apart. */
+    const pageId = (docId: DocId): string => {
+        const short = shortDocId(docId);
+        const shared = [...docs.keys()].some((other) => other !== docId && other.startsWith(short));
+        return shared ? docId : short;
+    };
+
+    const pagePath = (docId: DocId): string =>
+        routes.page(pageId(docId), basename(docs.get(docId)!.session.path));
+
+    /** By the id segment alone: a full id, or a short one that names exactly one open doc. */
+    const resolvePageId = (id: string): DocId | undefined => {
+        if (id.length !== SHORT_ID_LENGTH) {
+            return docs.has(id) ? id : undefined;
+        }
+        const matches = [...docs.keys()].filter((docId) => docId.startsWith(id));
+        return matches.length === 1 ? matches[0] : undefined;
     };
 
     const status = (): DaemonStatus => ({
@@ -217,8 +248,6 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
         ) {
             return error(403, "forbidden");
         }
-        lastActivity = Date.now();
-        armIdle();
         const { pathname } = url;
         if (
             request.method === "GET" &&
@@ -230,6 +259,8 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
         if (!tokenMatches(requestToken(request, url, TOKEN_PARAM), token)) {
             return error(403, "forbidden");
         }
+        lastActivity = Date.now();
+        armIdle();
 
         if (pathname === routes.register && request.method === "POST") {
             const body = await readJson(request);
@@ -246,13 +277,30 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
             return json({ ok: true });
         }
 
-        const page = /^\/d\/([0-9a-f]{12})(?:\/asset\/(.+))?$/.exec(pathname);
+        const image = /^\/d\/([0-9a-f]{12})\/asset\/(.+)$/.exec(pathname);
+        if (image && request.method === "GET") {
+            const doc = docs.get(image[1]!);
+            return doc ? asset(doc.session, image[2]!) : error(404, "not-found");
+        }
+
+        const page = /^\/d\/([0-9a-f]{8}|[0-9a-f]{12})(?:\/([^/]*))?$/.exec(pathname);
         if (page && request.method === "GET") {
-            const doc = docs.get(page[1]!);
-            if (!doc) {
+            const docId = resolvePageId(page[1]!);
+            if (docId === undefined) {
                 return error(404, "not-found");
             }
-            return page[2] === undefined ? shell(doc, token) : asset(doc.session, page[2]);
+            const doc = docs.get(docId)!;
+            if (
+                page[1] !== pageId(docId) ||
+                decodeSegment(page[2]) !== basename(doc.session.path)
+            ) {
+                // Path-only, so it stays on this origin; the query, token included, goes along.
+                return new Response(null, {
+                    status: 302,
+                    headers: { ...SECURITY_HEADERS, location: `${pagePath(docId)}${url.search}` },
+                });
+            }
+            return shell(doc, token);
         }
 
         const api = /^\/api\/docs\/([0-9a-f]{12})\/([a-z-]+)$/.exec(pathname);
@@ -272,10 +320,15 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
         }
         if (action === "events" && request.method === "GET") {
             server.timeout(request, 0);
-            return events(doc, request, () => {
-                lastActivity = Date.now();
-                armIdle();
-            });
+            return events(
+                doc,
+                request,
+                () => {
+                    lastActivity = Date.now();
+                    armIdle();
+                },
+                devStamp,
+            );
         }
         if (action === "open-file" && request.method === "POST") {
             const body = await readJson(request);
@@ -342,7 +395,10 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
     armIdle();
     const presence = setInterval(() => {
         for (const doc of docs.values()) {
-            if (doc.streams.size > 0 && agentWatching(doc.session.path) !== doc.watching) {
+            if (
+                doc.streams.size > 0 &&
+                JSON.stringify(connectedAgents(doc.session.path)) !== doc.agents
+            ) {
                 for (const resend of doc.streams) {
                     resend();
                 }
@@ -357,6 +413,17 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
         register,
         session: (docId) => docs.get(docId)?.session,
         status,
+        reload() {
+            if (!devStamp) {
+                return;
+            }
+            builds += 1;
+            for (const doc of docs.values()) {
+                for (const resend of doc.streams) {
+                    resend();
+                }
+            }
+        },
         async stop() {
             clearTimeout(idleTimer);
             clearInterval(presence);
@@ -378,7 +445,10 @@ async function mutate(
     const id = () => threadId(body.id);
     switch (action) {
         case "comment":
-            return await session.comment({ anchor: anchor(body.anchor), text: text(body.text) });
+            return await session.comment({
+                ...(body.anchor === undefined ? {} : { anchor: anchor(body.anchor) }),
+                text: text(body.text),
+            });
         case "suggest":
             return await session.suggest({
                 anchor: anchor(body.anchor),
@@ -398,6 +468,12 @@ async function mutate(
             return await session.resolve(id());
         case "reopen":
             return await session.reopen(id());
+        case "delete":
+            return await session.deleteThread(id());
+        case "undelete":
+            return await session.undeleteThread(id());
+        case "retract":
+            return await session.retract(id(), integer(body.seq));
         case "revert":
             return await session.revert(id());
         case "save":
@@ -407,6 +483,7 @@ async function mutate(
                 after: text(body.after),
                 ...(body.version === undefined ? {} : { version: integer(body.version) }),
                 ...(body.strict === undefined ? {} : { strict: flag(body.strict) }),
+                ...(body.undoes === undefined ? {} : { undoes: integer(body.undoes) }),
             });
         case "follow-through":
             return await session.followThrough(integer(body.editSeq), text(body.text));
@@ -415,11 +492,7 @@ async function mutate(
         case "send-all":
             return await session.sendAll();
         case "setting":
-            return await session.setSetting(
-                settingKey(body.key),
-                flag(body.value),
-                body.id === undefined ? undefined : id(),
-            );
+            return await session.setSetting(settingKey(body.key), flag(body.value));
     }
 }
 
@@ -456,7 +529,7 @@ function threadId(value: unknown): ThreadId {
 }
 
 function settingKey(value: unknown): DocSettingKey {
-    if (value !== "suggestionsOnly" && value !== "autoApply") {
+    if (value !== "autoApply") {
         throw badRequest("unknown setting");
     }
     return value;
@@ -512,11 +585,16 @@ function error(status: number, code: WireError, detail?: string): Response {
 
 /** The session's snapshot JSON plus the presence reading, taken fresh and remembered. */
 function wireJson(doc: Registered, snapshot: string): string {
-    doc.watching = agentWatching(doc.session.path);
-    return `${snapshot.slice(0, -1)},"agentWatching":${doc.watching}}`;
+    doc.agents = JSON.stringify(connectedAgents(doc.session.path));
+    return `${snapshot.slice(0, -1)},"agents":${doc.agents}}`;
 }
 
-function events(doc: Registered, request: Request, onClientsChanged: () => void): Response {
+function events(
+    doc: Registered,
+    request: Request,
+    onClientsChanged: () => void,
+    devStamp?: () => string,
+): Response {
     const { session } = doc;
     const encoder = new TextEncoder();
     let cleanup = () => {};
@@ -533,7 +611,12 @@ function events(doc: Registered, request: Request, onClientsChanged: () => void)
                 write(
                     `event: ${SNAPSHOT_EVENT}\nid: ${version}\ndata: ${wireJson(doc, snapshot)}\n\n`,
                 );
-            const resend = () => send(session.snapshotJson(), session.version);
+            const resend = () => {
+                if (devStamp) {
+                    write(`event: ${DEV_EVENT}\ndata: ${devStamp()}\n\n`);
+                }
+                send(session.snapshotJson(), session.version);
+            };
             write("retry: 1000\n\n");
             resend();
             const unsubscribe = session.subscribe(send);
@@ -581,6 +664,7 @@ function shell(doc: Registered, token: string): Response {
 <meta name="${TOKEN_META}" content="${escapeHtml(token)}">
 <meta name="${DOC_META}" content="${session.docId}">
 <title>${title}</title>
+<link rel="icon" id="${ICON_ELEMENT}" href="${faviconHref(null)}">
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -597,6 +681,14 @@ function shell(doc: Registered, token: string): Response {
             "cache-control": "no-store",
         },
     });
+}
+
+function decodeSegment(segment: string | undefined): string | undefined {
+    try {
+        return segment === undefined ? undefined : decodeURIComponent(segment);
+    } catch {
+        return undefined;
+    }
 }
 
 function asset(session: DocSession, encoded: string): Response {
@@ -672,6 +764,7 @@ function logError(caught: unknown): void {
 async function runDaemon(): Promise<void> {
     const paths = statePaths(ensureStateDir(stateDir()));
     const idleMs = Number(process.env.MARGIN_IDLE_MS) || IDLE_EXIT_MS;
+    const dev = process.env.MARGIN_DEV === "1";
     let server: MarginServer | undefined;
     let stopping = false;
     const shutdown = async () => {
@@ -685,9 +778,17 @@ async function runDaemon(): Promise<void> {
     };
     server = await startServer({
         stateDir: paths.dir,
-        idleMs,
-        onIdle: () => void shutdown(),
         onStop: () => void shutdown(),
+        // Under `bun run dev` the supervisor owns the lifetime, and a pinned port and token let
+        // open tabs reconnect across restarts.
+        ...(dev
+            ? {
+                  dev,
+                  port: Number(process.env.MARGIN_DEV_PORT) || 0,
+                  token: process.env.MARGIN_DEV_TOKEN || undefined,
+                  clientDir: process.env.MARGIN_DEV_CLIENT_DIR || undefined,
+              }
+            : { idleMs, onIdle: () => void shutdown() }),
     });
     writeDaemonInfo(paths.info, {
         pid: process.pid,
@@ -699,6 +800,9 @@ async function runDaemon(): Promise<void> {
     process.on("SIGTERM", () => void shutdown());
     process.on("SIGINT", () => void shutdown());
     process.on("SIGHUP", () => undefined);
+    if (dev) {
+        process.on("SIGUSR2", () => server?.reload());
+    }
 }
 
 if (import.meta.main) {

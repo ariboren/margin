@@ -10,15 +10,17 @@ import {
     writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { createAnchor } from "../core/anchor.ts";
 import { decodeSource, flattenUnits, hashText, parseDoc } from "../core/blocks.ts";
 import { appendEvents, readLog, transact, type LogTxn } from "../core/log.ts";
 import { applyEdit, applyEditIn } from "../core/apply.ts";
-import type { Event, SaveResult, ThreadId } from "../core/model.ts";
+import { emitWatch, WakeTail } from "../cli/watch.ts";
+import { threadStatus } from "../client/view-model.ts";
+import type { Anchor, Event, EventInput, SaveResult, ThreadId } from "../core/model.ts";
 import { startServer, type MarginServer } from "./daemon.ts";
 import { DocSession, mapStart, mapStartStrict } from "./session.ts";
-import { routes, type MutationName, type WireSnapshot } from "./protocol.ts";
+import { routes, shortDocId, type MutationName, type WireSnapshot } from "./protocol.ts";
 
 const PUBLIC_SAMPLE = join(import.meta.dir, "..", "..", "fixtures", "public-sample.md");
 
@@ -251,7 +253,7 @@ describe("doc session", () => {
         expect(log.filter((event) => event.type === "edit")).toHaveLength(1);
         expect(log.filter((event) => event.type === "outside")).toHaveLength(0);
         const thread = session.snapshot().threads[0]!;
-        expect(thread.anchor.exact).toBe("quick slow brown fox");
+        expect(thread.anchor!.exact).toBe("quick slow brown fox");
         expect(thread.detached).toBe(false);
         expect(session.snapshot().hash).toBe(hashText(read(path)));
     });
@@ -296,7 +298,7 @@ describe("doc session", () => {
             expect(logged).toEqual(["comment", "edit", "outside"]);
             const outside = (await events(path)).find((event) => event.type === "outside");
             expect(outside).toHaveProperty("edit");
-            expect(thread.anchor.exact).toBe("cold code path rarely runs");
+            expect(thread.anchor!.exact).toBe("cold code path rarely runs");
             expect(thread.detached).toBe(false);
             expect(final).toContain("cold code path rarely runs");
         });
@@ -337,7 +339,7 @@ describe("doc session", () => {
         expect(log.map((event) => event.type)).toEqual(["comment", "edit", "outside"]);
         expect(log.at(-1)).not.toHaveProperty("edit");
         const thread = session.snapshot().threads[0]!;
-        expect(thread.anchor.exact).toBe("cold path");
+        expect(thread.anchor!.exact).toBe("cold path");
         expect(thread.detached).toBe(false);
         expect(session.snapshot().changedOnDisk).toBeString();
     });
@@ -364,7 +366,7 @@ describe("doc session", () => {
         await session.sync();
 
         const thread = session.snapshot().threads[0]!;
-        expect(thread.anchor.exact).toBe("cold code path rarely runs");
+        expect(thread.anchor!.exact).toBe("cold code path rarely runs");
         expect(thread.detached).toBe(false);
         const log = await events(path);
         expect(log.map((event) => event.type)).toEqual(["comment", "reanchor", "outside"]);
@@ -386,12 +388,14 @@ describe("doc session", () => {
 
         const second = await serve();
         expect(await open(second, path)).toBe(docId);
-        const page = await fetch(`${second.origin}${routes.page(docId)}?t=${second.token}`);
+        const page = await fetch(
+            `${second.origin}${routes.page(shortDocId(docId), basename(path))}?t=${second.token}`,
+        );
         expect(page.status).toBe(200);
         const thread = (await snapshot(second, docId)).threads[0]!;
         expect(thread.id).toBe("c1");
         expect(thread.messages[0]?.text).toBe("Tighten this");
-        expect(thread.anchor.exact).toBe(anchor.exact);
+        expect(thread.anchor!.exact).toBe(anchor.exact);
         expect(thread.detached).toBe(false);
         expect(read(path)).toBe(source);
     });
@@ -901,7 +905,6 @@ describe("doc session", () => {
                     replace: `${otherText} Agent.`,
                     anchor: createAnchor(afterAccept, { start: other.start, end: other.end }),
                     apply: true,
-                    downgraded: false,
                 },
             ]);
         });
@@ -929,6 +932,29 @@ describe("doc session", () => {
         expect(sent.state).toBe("open");
     });
 
+    test("a doc note needs no anchor: held it drafts, sent it opens, and it never detaches", async () => {
+        const path = copySample();
+        const server = await serve();
+        const docId = await open(server, path);
+        await call(server, docId, "hold", { on: true });
+        const { id } = await call<{ id: ThreadId }>(server, docId, "comment", {
+            text: "Tighten the whole intro.",
+        });
+        const draft = (await snapshot(server, docId)).threads.find((t) => t.id === id)!;
+        expect(draft).toMatchObject({ state: "draft", detached: false });
+        expect(draft.anchor).toBeUndefined();
+        await call(server, docId, "send-all", {});
+        const sent = (await snapshot(server, docId)).threads.find((t) => t.id === id)!;
+        expect(sent.state).toBe("open");
+        const accept = await fetch(`${server.origin}${routes.mutate(docId, "accept")}`, {
+            method: "POST",
+            headers: headers(server),
+            body: JSON.stringify({ id }),
+        });
+        expect(accept.status).toBe(409);
+        expect(read(path)).toBe(read(PUBLIC_SAMPLE));
+    });
+
     test("bad input is a 400 and an unknown thread a 404", async () => {
         const path = copySample();
         const server = await serve();
@@ -940,6 +966,7 @@ describe("doc session", () => {
                 body: JSON.stringify(body),
             });
         expect((await post("save", { start: -1, before: "", after: "" })).status).toBe(400);
+        expect((await post("comment", { anchor: 5, text: "x" })).status).toBe(400);
         expect((await post("reply", { id: "c9", text: "hi" })).status).toBe(404);
         expect(
             (
@@ -982,5 +1009,471 @@ describe("idle exit", () => {
         stream.close();
         await Bun.sleep(400);
         expect(idled).toBe(1);
+    });
+});
+
+describe("delete and undelete", () => {
+    async function setup(): Promise<{ session: DocSession; anchor: (exact: string) => Anchor }> {
+        const path = join(dir, "doc.md");
+        writeFileSync(path, "# Title\n\nThe quick brown fox jumps over the lazy dog.\n");
+        const session = await DocSession.open("0123456789ab", path);
+        const anchor = (exact: string): Anchor => {
+            const start = read(path).indexOf(exact);
+            return createAnchor(read(path), { start, end: start + exact.length });
+        };
+        return { session, anchor };
+    }
+
+    const ids = (session: DocSession) => session.snapshot().threads.map((thread) => thread.id);
+
+    test("a deleted thread leaves the snapshot, resolved or not, and comes back as it was", async () => {
+        const { session, anchor } = await setup();
+        const { id } = await session.comment({ anchor: anchor("quick"), text: "Why?" });
+        const { id: done } = await session.comment({ anchor: anchor("lazy"), text: "Ok" });
+        await session.resolve(done);
+        const before = session.snapshot().threads;
+
+        await session.deleteThread(id);
+        await session.deleteThread(done);
+        expect(ids(session)).toEqual([]);
+
+        await session.undeleteThread(id);
+        await session.undeleteThread(done);
+        expect(session.snapshot().threads).toEqual(before);
+    });
+
+    test("both are idempotent; an unknown id is not found", async () => {
+        const { session, anchor } = await setup();
+        const { id } = await session.comment({ anchor: anchor("quick"), text: "Why?" });
+        await session.undeleteThread(id);
+        await session.deleteThread(id);
+        await session.deleteThread(id);
+        const types = (await events(session.path)).map((event) => event.type);
+        expect(types.filter((type) => type === "delete" || type === "undelete")).toEqual([
+            "delete",
+        ]);
+        for (const call of [() => session.deleteThread("c9"), () => session.undeleteThread("c9")]) {
+            await expect(call()).rejects.toMatchObject({ status: 404, error: "not-found" });
+        }
+    });
+
+    test("the page deletes and undeletes over HTTP, with the token", async () => {
+        const path = join(dir, "doc.md");
+        writeFileSync(path, "# Title\n\nThe quick brown fox jumps.\n");
+        const server = await serve();
+        const docId = await open(server, path);
+        const source = read(path);
+        const start = source.indexOf("quick");
+        const { id } = await call<{ id: ThreadId }>(server, docId, "comment", {
+            anchor: createAnchor(source, { start, end: start + 5 }),
+            text: "Why?",
+        });
+        const unsigned = await fetch(`${server.origin}${routes.mutate(docId, "delete")}`, {
+            method: "POST",
+            headers: { ...headers(server), authorization: "Bearer nope" },
+            body: JSON.stringify({ id }),
+        });
+        expect(unsigned.status).toBe(403);
+        await call(server, docId, "delete", { id });
+        expect((await snapshot(server, docId)).threads).toEqual([]);
+        await call(server, docId, "undelete", { id });
+        expect((await snapshot(server, docId)).threads.map((thread) => thread.id)).toEqual([id]);
+    });
+
+    test("a deleted draft is not sent, and the page cannot act on a deleted thread", async () => {
+        const { session, anchor } = await setup();
+        await session.setHold(true);
+        const { id } = await session.comment({ anchor: anchor("quick"), text: "Draft" });
+        await session.deleteThread(id);
+        await session.sendAll();
+        expect((await events(session.path)).some((event) => event.type === "send")).toBe(false);
+        await expect(session.reply(id, "More")).rejects.toMatchObject({ status: 404 });
+
+        await session.undeleteThread(id);
+        expect(session.snapshot().threads[0]).toMatchObject({ id, state: "draft" });
+    });
+});
+
+describe("undo of a save", () => {
+    /** The user's edit of a mid-document paragraph, and the strict save that takes it back. */
+    async function edited(session: DocSession, path: string) {
+        const source = read(path);
+        const unit = paragraph(source);
+        const before = source.slice(unit.start, unit.end);
+        const after = `${before} Mine.`;
+        const saved = await session.save({ start: unit.start, before, after, version: 0 });
+        expect(saved.ok).toBe(true);
+        const undo = () =>
+            session.save({
+                start: unit.start,
+                before: after,
+                after: before,
+                version: saved.version,
+                strict: true,
+            });
+        return { source, unit, before, after, undo };
+    }
+
+    test("a save that undoes an edit is logged as its undo; a wrong inverse is a 400", async () => {
+        const path = copySample();
+        const session = await DocSession.open("0123456789ab", path);
+        const { unit, before, after } = await edited(session, path);
+        const edited1 = (await events(path)).at(-1)!.seq;
+        await expect(
+            session.save({
+                start: unit.start,
+                before: after,
+                after: `${before}!`,
+                version: edited1,
+                strict: true,
+                undoes: edited1,
+            }),
+        ).rejects.toMatchObject({ status: 400, error: "bad-request" });
+        await expect(
+            session.save({ start: unit.start, before: after, after: before, undoes: 999 }),
+        ).rejects.toMatchObject({ status: 400 });
+        const undone = await session.save({
+            start: unit.start,
+            before: after,
+            after: before,
+            version: edited1,
+            strict: true,
+            undoes: edited1,
+        });
+        expect(undone.ok).toBe(true);
+        expect((await events(path)).at(-1)).toMatchObject({
+            type: "edit",
+            cause: "undo",
+            of: edited1,
+            seq: undone.version,
+        });
+        expect(read(path).slice(unit.start, unit.end)).toBe(before);
+    });
+
+    test("an agent edit inside the same block since makes the undo a conflict, file untouched", async () => {
+        const path = copySample();
+        const session = await DocSession.open("0123456789ab", path);
+        const { unit, after, undo } = await edited(session, path);
+        await transact(path, (txn) => {
+            applyEditIn(txn, {
+                start: unit.start,
+                before: after,
+                after: `${after} Agent.`,
+                cause: "apply",
+                by: "agent",
+                id: "c1",
+            });
+        });
+        const bytes = readFileSync(path);
+        expect(await undo()).toMatchObject({ ok: false, reason: "conflict" });
+        expect(Buffer.compare(readFileSync(path), bytes)).toBe(0);
+    });
+
+    test("an agent edit above since moves the undo, which lands byte-exact", async () => {
+        const path = copySample();
+        const session = await DocSession.open("0123456789ab", path);
+        const { source, unit, before, undo } = await edited(session, path);
+        await transact(path, (txn) => {
+            applyEditIn(txn, {
+                start: 0,
+                before: "",
+                after: "Inserted above.\n\n",
+                cause: "apply",
+                by: "agent",
+                id: "c1",
+            });
+        });
+        const undone = await undo();
+        expect(undone).toMatchObject({ ok: true, at: unit.start + "Inserted above.\n\n".length });
+        expect(read(path)).toBe(`Inserted above.\n\n${source}`);
+        expect(read(path).slice(undone.at!, undone.at! + before.length)).toBe(before);
+    });
+
+    test("an editor write touching the block since is a conflict; one elsewhere is not", async () => {
+        const path = copySample();
+        const session = await DocSession.open("0123456789ab", path);
+        const { unit, after, undo } = await edited(session, path);
+        const written = read(path);
+        editorWrite(
+            path,
+            `${written.slice(0, unit.start + after.length)}!${written.slice(unit.start + after.length)}`,
+        );
+        expect(await undo()).toMatchObject({ ok: false, reason: "conflict" });
+        expect(read(path)).toBe(
+            `${written.slice(0, unit.start + after.length)}!${written.slice(unit.start + after.length)}`,
+        );
+
+        const other = await DocSession.open("0123456789ac", copySample("other.md"));
+        const second = await edited(other, other.path);
+        editorWrite(other.path, `${read(other.path)}\nTrailing.\n`);
+        expect(await second.undo()).toMatchObject({ ok: true });
+        expect(read(other.path)).toBe(`${second.source}\nTrailing.\n`);
+    });
+});
+
+describe("retract", () => {
+    const DOC = "# Title\n\nThe quick brown fox jumps over the lazy dog.\n\nA second paragraph.\n";
+
+    async function setup(name = "doc.md") {
+        const path = join(dir, name);
+        writeFileSync(path, DOC);
+        const session = await DocSession.open("0123456789ab", path);
+        const anchor = (exact: string): Anchor => {
+            const start = read(path).indexOf(exact);
+            return createAnchor(read(path), { start, end: start + exact.length });
+        };
+        const { id } = await session.comment({ anchor: anchor("quick"), text: "Why?" });
+        const thread = () => session.snapshot().threads.find((t) => t.id === id)!;
+        const agent = async (...inputs: Parameters<typeof appendEvents>[1]) =>
+            await appendEvents(path, inputs);
+        return { path, session, id, thread, agent, anchor };
+    }
+
+    test("a reply is taken back with its message, once; the answer names its seq", async () => {
+        const { session, id, thread, agent } = await setup();
+        await agent({ type: "reply", by: "agent", id, text: "Because." });
+        const replied = await session.reply(id, "Still why?");
+        expect(replied.seq).toBe(3);
+        expect(thread()).toMatchObject({ state: "open", messages: [{}, {}, { seq: 3 }] });
+        expect(await session.retract(id, 3)).toMatchObject({ ok: true });
+        expect(thread()).toMatchObject({ state: "replied", messages: [{ seq: 1 }, { seq: 2 }] });
+        expect(await session.retract(id, 3)).toMatchObject({ ok: true });
+        const retracts = (await events(session.path)).filter((event) => event.type === "retract");
+        expect(retracts).toHaveLength(1);
+        expect(retracts[0]).toMatchObject({ by: "user", id, of: 3 });
+    });
+
+    test.each<[string, (id: ThreadId) => EventInput]>([
+        ["a claim", (id) => ({ type: "claim", by: "agent", ids: [id] })],
+        [
+            "a cursor past it naming the thread",
+            (id) => ({ type: "cursor", by: "agent", stream: "watch", upTo: 2, ids: [id] }),
+        ],
+        [
+            "a cursor past it from an older log, which names no threads",
+            () => ({ type: "cursor", by: "agent", stream: "watch", upTo: 2 }),
+        ],
+        ["an agent reply", (id) => ({ type: "reply", by: "agent", id, text: "Ok" })],
+    ])("is refused as seen after %s, and nothing is appended", async (_, event) => {
+        const { session, id, thread, agent } = await setup();
+        await session.reply(id, "More");
+        await agent(event(id));
+        const count = (await events(session.path)).length;
+        expect(await session.retract(id, 2)).toEqual({ ok: false, reason: "seen", version: 3 });
+        expect((await events(session.path)).length).toBe(count);
+        expect(thread().messages.some((message) => message.seq === 2)).toBe(true);
+    });
+
+    test("a cursor short of the event, or a claim of another thread, is not seen", async () => {
+        const { session, id, agent, anchor } = await setup();
+        const { id: other } = await session.comment({ anchor: anchor("lazy"), text: "Hm" });
+        await session.reply(id, "More");
+        await agent(
+            { type: "cursor", by: "agent", stream: "pending", upTo: 2 },
+            { type: "claim", by: "agent", ids: [other] },
+        );
+        expect(await session.retract(id, 3)).toMatchObject({ ok: true });
+    });
+
+    test("a cursor past the event that named only other threads is not seen", async () => {
+        const { session, id, agent, anchor } = await setup();
+        const { id: other } = await session.comment({ anchor: anchor("lazy"), text: "Hm" });
+        await session.reply(id, "More");
+        await agent({ type: "cursor", by: "agent", stream: "watch", upTo: 3, ids: [other] });
+        expect(await session.retract(id, 3)).toMatchObject({ ok: true });
+    });
+
+    test("a watch that moved its cursor past a reply and a resolve it never printed leaves both retractable", async () => {
+        const { session, id, thread } = await setup();
+        const replied = await session.reply(id, "Still why?");
+        const resolved = await session.resolve(id);
+        const printed: string[] = [];
+        expect(await emitWatch(session.path, (text) => printed.push(text))).toBe(false);
+        expect(printed).toEqual([]);
+        expect((await events(session.path)).at(-1)).toMatchObject({
+            type: "cursor",
+            stream: "watch",
+            upTo: resolved.seq,
+            ids: [],
+        });
+        expect(await session.retract(id, resolved.seq)).toMatchObject({ ok: true });
+        expect(await session.retract(id, replied.seq)).toMatchObject({ ok: true });
+        expect(thread()).toMatchObject({ state: "open", messages: [{ seq: 1 }] });
+    });
+
+    test("a watch that printed the reply makes it seen", async () => {
+        const { session, id } = await setup();
+        const replied = await session.reply(id, "Still why?");
+        const printed: string[] = [];
+        expect(await emitWatch(session.path, (text) => printed.push(text))).toBe(true);
+        expect(printed).toEqual([`new ${id} "Title"\n`]);
+        expect(await session.retract(id, replied.seq)).toEqual({
+            ok: false,
+            reason: "seen",
+            version: 3,
+        });
+    });
+
+    test("a resolve taken back after an empty watch cursor wakes the watch again", async () => {
+        const { session, id, thread } = await setup();
+        const resolved = await session.resolve(id);
+        const printed: string[] = [];
+        const write = (text: string) => printed.push(text);
+        expect(await emitWatch(session.path, write)).toBe(false);
+        expect(await session.retract(id, resolved.seq)).toMatchObject({ ok: true });
+        expect(thread().state).toBe("open");
+        expect(threadStatus(thread(), Date.now())).toBe("open");
+        const tail = new WakeTail(session.path, "watch", { signal: AbortSignal.timeout(5_000) });
+        expect(await tail.next()).toBe(true);
+        // Times are whole milliseconds, and the pill needs the cursor strictly after the comment.
+        await Bun.sleep(2);
+        expect(await emitWatch(session.path, write)).toBe(true);
+        expect(printed).toEqual([`new ${id} "Title"\n`]);
+        expect((await events(session.path)).at(-1)).toMatchObject({ type: "cursor", ids: [id] });
+        await session.sync();
+        expect(threadStatus(thread(), Date.now())).toBe("notified");
+    });
+
+    test("a resolve taken back after a user reply the watch passed unprinted wakes it as a reply", async () => {
+        const { session, id, thread, agent } = await setup();
+        await agent({ type: "reply", by: "agent", id, text: "Because." });
+        await session.reply(id, "Still why?");
+        const resolved = await session.resolve(id);
+        const printed: string[] = [];
+        const write = (text: string) => printed.push(text);
+        expect(await emitWatch(session.path, write)).toBe(false);
+        expect(await session.retract(id, resolved.seq)).toMatchObject({ ok: true });
+        expect(threadStatus(thread(), Date.now())).toBe("open");
+        expect(await emitWatch(session.path, write)).toBe(true);
+        expect(printed).toEqual([`reply ${id} "Title"\n`]);
+    });
+
+    test("a retract that leaves the thread done does not wake the watch", async () => {
+        const { session, id, agent } = await setup();
+        await agent({ type: "reply", by: "agent", id, text: "Because." });
+        const replied = await session.reply(id, "Still why?");
+        await session.resolve(id);
+        expect(await emitWatch(session.path, () => {})).toBe(false);
+        expect(await session.retract(id, replied.seq)).toMatchObject({ ok: true });
+        expect(await emitWatch(session.path, () => {})).toBe(false);
+    });
+
+    test("only the user's own thread events on that thread can be taken back", async () => {
+        const { session, id, agent, anchor } = await setup();
+        const { id: other } = await session.comment({ anchor: anchor("lazy"), text: "Hm" });
+        await agent({ type: "reply", by: "agent", id, text: "Because." });
+        const { seq } = await session.resolve(other);
+        for (const [thread, of] of [
+            [id, 3],
+            [id, seq],
+            [id, 99],
+            [id, 1],
+        ] as const) {
+            await expect(session.retract(thread, of)).rejects.toMatchObject({ status: 404 });
+        }
+        expect(await session.retract(other, seq)).toMatchObject({ ok: true });
+    });
+
+    test("an accept is taken back byte-exact, the suggestion is pending again, and accepting again re-applies", async () => {
+        const { path, session, id, thread, agent } = await setup();
+        await agent(
+            { type: "claim", by: "agent", ids: [id] },
+            {
+                type: "suggest",
+                by: "agent",
+                id,
+                replace: "slow",
+                apply: false,
+            },
+        );
+        const bytes = readFileSync(path);
+        const accepted = await session.accept(id);
+        expect(accepted).toMatchObject({ ok: true, seq: 5 });
+        expect(read(path)).toBe(DOC.replace("quick", "slow"));
+        expect(await session.retract(id, 5)).toMatchObject({ ok: true });
+        expect(Buffer.compare(readFileSync(path), bytes)).toBe(0);
+        expect(thread()).toMatchObject({
+            state: "replied",
+            suggestion: { status: "pending", replace: "slow" },
+        });
+        const logged = await events(path);
+        expect(logged.at(-2)).toMatchObject({ type: "edit", cause: "revert", by: "user", id });
+        expect(logged.at(-1)).toMatchObject({ type: "retract", id, of: 5 });
+
+        expect(await session.accept(id)).toMatchObject({ ok: true });
+        expect(read(path)).toBe(DOC.replace("quick", "slow"));
+        expect(thread()).toMatchObject({ state: "resolved", suggestion: { status: "accepted" } });
+    });
+
+    test("an agent edit on the accepted text since refuses the retract; one above moves it", async () => {
+        const { path, session, id, thread, agent } = await setup();
+        const suggestion = {
+            type: "suggest",
+            by: "agent",
+            id,
+            replace: "slow",
+            apply: false,
+        } as const;
+        await agent(suggestion);
+        const { seq } = await session.accept(id);
+        await transact(path, (txn) => {
+            applyEditIn(txn, {
+                start: DOC.indexOf("quick"),
+                before: "slow",
+                after: "slower",
+                cause: "apply",
+                by: "agent",
+                id: "c2",
+            });
+        });
+        const bytes = readFileSync(path);
+        const count = (await events(path)).length;
+        expect(await session.retract(id, seq!)).toMatchObject({ ok: false, reason: "conflict" });
+        expect(Buffer.compare(readFileSync(path), bytes)).toBe(0);
+        expect((await events(path)).length).toBe(count);
+        expect(thread()).toMatchObject({ state: "resolved", suggestion: { status: "accepted" } });
+
+        const other = await setup("other.md");
+        await other.agent(suggestion);
+        const second = await other.session.accept(other.id);
+        await transact(other.path, (txn) => {
+            applyEditIn(txn, {
+                start: 0,
+                before: "# Title",
+                after: "# A longer title",
+                cause: "apply",
+                by: "agent",
+                id: "c2",
+            });
+        });
+        expect(await other.session.retract(other.id, second.seq!)).toMatchObject({ ok: true });
+        expect(read(other.path)).toBe(DOC.replace("# Title", "# A longer title"));
+    });
+
+    test("the page's answers carry the seq, and retract is a route", async () => {
+        const path = join(dir, "doc.md");
+        writeFileSync(path, DOC);
+        const server = await serve();
+        const docId = await open(server, path);
+        const source = read(path);
+        const start = source.indexOf("quick");
+        const { id } = await call<{ id: ThreadId }>(server, docId, "comment", {
+            anchor: createAnchor(source, { start, end: start + 5 }),
+            text: "Why?",
+        });
+        const replied = await call<{ seq: number }>(server, docId, "reply", { id, text: "More" });
+        expect(replied.seq).toBe(2);
+        const resolved = await call<{ seq: number }>(server, docId, "resolve", { id });
+        expect(resolved.seq).toBe(3);
+        expect(await call(server, docId, "retract", { id, seq: 3 })).toMatchObject({ ok: true });
+        expect(await call(server, docId, "retract", { id, seq: 2 })).toMatchObject({ ok: true });
+        const thread = (await snapshot(server, docId)).threads[0]!;
+        expect(thread).toMatchObject({ state: "open", messages: [{ seq: 1 }] });
+        const bad = await fetch(`${server.origin}${routes.mutate(docId, "retract")}`, {
+            method: "POST",
+            headers: headers(server),
+            body: JSON.stringify({ id, seq: "2" }),
+        });
+        expect(bad.status).toBe(400);
     });
 });

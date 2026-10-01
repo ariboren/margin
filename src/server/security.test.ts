@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, type MarginServer } from "./daemon.ts";
-import { routes } from "./protocol.ts";
+import { routes, shortDocId } from "./protocol.ts";
 import { hostAllowed, originAllowed, resolveImage, tokenMatches } from "./security.ts";
 
 describe("checks", () => {
@@ -114,7 +114,9 @@ describe("server", () => {
 
     test("missing or bad token gets 403 on every doc route", async () => {
         const urls = [
-            routes.page(docId),
+            routes.page(shortDocId(docId), "doc.md"),
+            routes.page(shortDocId(docId), "other.md"),
+            `/d/${docId}`,
             routes.snapshot(docId),
             routes.events(docId),
             routes.asset(docId, "img/pic.png"),
@@ -131,7 +133,9 @@ describe("server", () => {
     });
 
     test("the page carries the CSP and no-referrer headers", async () => {
-        const page = await fetch(`${server.origin}${routes.page(docId)}?t=${server.token}`);
+        const page = await fetch(
+            `${server.origin}${routes.page(shortDocId(docId), "doc.md")}?t=${server.token}`,
+        );
         expect(page.status).toBe(200);
         expect(page.headers.get("content-security-policy")).toContain("script-src 'self'");
         expect(page.headers.get("referrer-policy")).toBe("no-referrer");

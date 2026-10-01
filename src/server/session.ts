@@ -21,9 +21,18 @@ import {
     emptyState,
     nextThreadId,
     reanchorInput,
+    withoutDeleted,
     type DocState,
 } from "../core/threads.ts";
-import type { DocId, Ok, SaveRequest, WireError, WireSnapshot } from "./protocol.ts";
+import type {
+    DocId,
+    Ok,
+    RetractResult,
+    SaveRequest,
+    Seq,
+    WireError,
+    WireSnapshot,
+} from "./protocol.ts";
 
 /** A mutation the client got wrong; the server maps it to a JSON error with this status. */
 export class WireFailure extends Error {
@@ -58,7 +67,28 @@ export interface HashMemory {
 }
 
 const OK: Ok = { ok: true };
-const MISSING: SaveResult = { ok: false, reason: "missing" };
+const MISSING: SaveResult & RetractResult = { ok: false, reason: "missing" };
+
+/** The answer to a mutation that appended one event: ok, with that event's seq. */
+function appended(events: Event[]): Ok & Seq {
+    return { ok: true, seq: events[events.length - 1]!.seq };
+}
+
+/**
+ * The agent read the thread past `seq`: a claim of it, a cursor on either stream past the
+ * event that named the thread, or an event of its own on the thread since. A cursor from an
+ * older log names no threads and counts for every one: refusing a retract is the safe error.
+ */
+function seenByAgent(history: readonly Event[], id: ThreadId, seq: number): boolean {
+    return eventsAfter(history, seq).some(
+        (event) =>
+            (event.type === "claim" && event.ids.includes(id)) ||
+            (event.type === "cursor" &&
+                event.upTo >= seq &&
+                (event.ids === undefined || event.ids.includes(id))) ||
+            (event.by === "agent" && "id" in event && event.id === id),
+    );
+}
 
 /**
  * One registered doc: the last source seen, the fold of its log, and the tabs listening. Every
@@ -143,7 +173,8 @@ export class DocSession {
         if (this.cached?.key === key) {
             return this.cached.json;
         }
-        const threads = [...this.state.threads.values()].map((thread): Thread => {
+        const threads = [...withoutDeleted(this.state).threads.values()].map((thread): Thread => {
+            if (!thread.anchor) return thread;
             const range = resolveAnchor(this.source, thread.anchor);
             return {
                 ...thread,
@@ -196,16 +227,17 @@ export class DocSession {
         });
     }
 
-    async comment(input: { anchor: Anchor; text: string }): Promise<Versioned<{ id: ThreadId }>> {
+    /** Without an anchor, a doc note: it needs no source, so it works while the file is missing. */
+    async comment(input: { anchor?: Anchor; text: string }): Promise<Versioned<{ id: ThreadId }>> {
         return await this.mutate((txn) => {
-            const anchor = this.currentAnchor(input.anchor);
+            const anchor = input.anchor ? this.currentAnchor(input.anchor) : undefined;
             const id = nextThreadId(txn.events);
             txn.append([
                 {
                     type: "comment",
                     by: "user",
                     id,
-                    anchor,
+                    ...(anchor ? { anchor } : {}),
                     text: input.text,
                     draft: this.state.settings.hold,
                 },
@@ -224,7 +256,7 @@ export class DocSession {
             const anchor = this.currentAnchor(input.anchor);
             const id = nextThreadId(txn.events);
             const suggestion = { type: "suggest", by: "user", id, replace: input.replace } as const;
-            const flags = { apply: false, downgraded: false };
+            const flags = { apply: false };
             if (this.state.settings.hold) {
                 txn.append([
                     {
@@ -251,20 +283,20 @@ export class DocSession {
         });
     }
 
-    async reply(id: ThreadId, text: string): Promise<Versioned<Ok>> {
+    async reply(id: ThreadId, text: string): Promise<Versioned<Ok & Seq>> {
         return await this.mutate((txn) => {
             this.thread(id);
-            txn.append([{ type: "reply", by: "user", id, text }]);
-            return OK;
+            return appended(txn.append([{ type: "reply", by: "user", id, text }]));
         });
     }
 
     /** Applies a pending suggestion at its anchor, then resolves; both under one lock. */
-    async accept(id: ThreadId): Promise<Versioned<SaveResult>> {
-        return await this.mutate((txn): SaveResult => {
+    async accept(id: ThreadId): Promise<Versioned<SaveResult & Partial<Seq>>> {
+        return await this.mutate((txn): SaveResult & Partial<Seq> => {
             const thread = this.thread(id);
             const suggestion = thread.suggestion;
-            if (!suggestion) {
+            // A doc note never carries a suggestion; the guard only narrows the type.
+            if (!suggestion || !thread.anchor) {
                 throw new WireFailure(409, "no-suggestion");
             }
             if (suggestion.status === "pending") {
@@ -287,33 +319,106 @@ export class DocSession {
                     return this.failure(result, range.start, thread.anchor.exact.length);
                 }
             }
-            txn.append([{ type: "accept", by: "user", id }]);
-            return { ok: true };
+            return appended(txn.append([{ type: "accept", by: "user", id }]));
         }, MISSING);
     }
 
-    async reject(id: ThreadId, note?: string): Promise<Versioned<Ok>> {
+    async reject(id: ThreadId, note?: string): Promise<Versioned<Ok & Seq>> {
         return await this.mutate((txn) => {
             this.thread(id);
-            txn.append([
-                { type: "reject", by: "user", id, ...(note === undefined ? {} : { note }) },
-            ]);
+            return appended(
+                txn.append([
+                    { type: "reject", by: "user", id, ...(note === undefined ? {} : { note }) },
+                ]),
+            );
+        });
+    }
+
+    async resolve(id: ThreadId): Promise<Versioned<Ok & Seq>> {
+        return await this.mutate((txn) => {
+            this.thread(id);
+            return appended(txn.append([{ type: "resolve", by: "user", id }]));
+        });
+    }
+
+    async reopen(id: ThreadId): Promise<Versioned<Ok & Seq>> {
+        return await this.mutate((txn) => {
+            this.thread(id);
+            return appended(txn.append([{ type: "reopen", by: "user", id }]));
+        });
+    }
+
+    /**
+     * Takes back the user's own reply, accept, reject, resolve or reopen `seq` on `id`, while
+     * the agent has not read it: refused once a claim names the thread, a cursor past the event
+     * named it, or the agent acted on the thread since (`margin show` leaves no trace and is not
+     * counted). An accept's text is put back first, strictly, in the same transaction: anything
+     * that touched it since is a conflict and nothing is appended.
+     */
+    async retract(id: ThreadId, seq: number): Promise<Versioned<RetractResult>> {
+        return await this.mutate((txn): RetractResult => {
+            this.thread(id);
+            if (this.history.some((event) => event.type === "retract" && event.of === seq)) {
+                return OK;
+            }
+            const record = this.state.retractable.get(seq);
+            if (!record || record.id !== id) {
+                throw new WireFailure(404, "not-found", `no event ${seq} of yours on ${id}`);
+            }
+            if (seenByAgent(this.history, id, seq)) {
+                return { ok: false, reason: "seen" };
+            }
+            if (record.type === "accept") {
+                if (this.missing) {
+                    return MISSING;
+                }
+                const edit = this.state.edits.findLast(
+                    (logged) => logged.id === id && logged.cause === "accept" && logged.seq < seq,
+                );
+                if (edit) {
+                    const mapped = this.mapStrict(edit.seq, edit.start, edit.after.length);
+                    if (!mapped.exact || !this.source.startsWith(edit.after, mapped.start)) {
+                        return { ok: false, reason: "conflict" };
+                    }
+                    const result = applyEditIn(txn, {
+                        start: mapped.start,
+                        before: edit.after,
+                        after: edit.before,
+                        cause: "revert",
+                        by: "user",
+                        id,
+                    });
+                    if (!result.ok) {
+                        return result.reason === "missing"
+                            ? MISSING
+                            : { ok: false, reason: "conflict" };
+                    }
+                }
+            }
+            txn.append([{ type: "retract", by: "user", id, of: seq }]);
+            return OK;
+        }, MISSING);
+    }
+
+    /** Hides the thread from every view; the agent's commands on it are refused until undeleted. */
+    async deleteThread(id: ThreadId): Promise<Versioned<Ok>> {
+        return await this.mutate((txn) => {
+            if (!this.state.deleted.has(id)) {
+                this.thread(id);
+                txn.append([{ type: "delete", by: "user", id }]);
+            }
             return OK;
         });
     }
 
-    async resolve(id: ThreadId): Promise<Versioned<Ok>> {
+    /** Brings a deleted thread back as it was: nothing could touch it while it was deleted. */
+    async undeleteThread(id: ThreadId): Promise<Versioned<Ok>> {
         return await this.mutate((txn) => {
-            this.thread(id);
-            txn.append([{ type: "resolve", by: "user", id }]);
-            return OK;
-        });
-    }
-
-    async reopen(id: ThreadId): Promise<Versioned<Ok>> {
-        return await this.mutate((txn) => {
-            this.thread(id);
-            txn.append([{ type: "reopen", by: "user", id }]);
+            if (this.state.deleted.has(id)) {
+                txn.append([{ type: "undelete", by: "user", id }]);
+            } else {
+                this.thread(id);
+            }
             return OK;
         });
     }
@@ -376,8 +481,8 @@ export class DocSession {
                 start: mapped.start,
                 before: input.before,
                 after: input.after,
-                cause: "user",
                 by: "user",
+                ...this.undoCause(input),
             });
             if (!result.ok) {
                 return this.failure(result, mapped.start, input.before.length);
@@ -386,6 +491,18 @@ export class DocSession {
             // outside write the second reconcile logs after it must not be paired with it.
             return { ok: true, at: mapped.start, version: txn.events.at(-1)?.seq ?? 0 };
         }, MISSING);
+    }
+
+    /** A save that says it undoes a logged edit must be that edit's exact inverse. */
+    private undoCause(input: SaveRequest): Pick<EditEvent, "cause" | "of"> {
+        if (input.undoes === undefined) {
+            return { cause: "user" };
+        }
+        const edit = this.state.edits.find((logged) => logged.seq === input.undoes);
+        if (!edit || edit.after !== input.before || edit.before !== input.after) {
+            throw new WireFailure(400, "bad-request", `not the inverse of edit ${input.undoes}`);
+        }
+        return { cause: "undo", of: input.undoes };
     }
 
     /** "Ask agent to follow through": a thread on the edit's text as it reads now. */
@@ -435,7 +552,7 @@ export class DocSession {
 
     async sendAll(): Promise<Versioned<Ok>> {
         return await this.mutate((txn) => {
-            const ids = [...this.state.threads.values()]
+            const ids = [...withoutDeleted(this.state).threads.values()]
                 .filter((thread) => thread.state === "draft")
                 .map((thread) => thread.id);
             if (ids.length > 0) {
@@ -445,14 +562,9 @@ export class DocSession {
         });
     }
 
-    async setSetting(key: DocSettingKey, value: boolean, id?: ThreadId): Promise<Versioned<Ok>> {
+    async setSetting(key: DocSettingKey, value: boolean): Promise<Versioned<Ok>> {
         return await this.mutate((txn) => {
-            if (id !== undefined) {
-                this.thread(id);
-            }
-            txn.append([
-                { type: "setting", by: "user", key, value, ...(id === undefined ? {} : { id }) },
-            ]);
+            txn.append([{ type: "setting", by: "user", key, value }]);
             return OK;
         });
     }
@@ -679,7 +791,7 @@ export class DocSession {
     }
 
     private thread(id: ThreadId): Thread {
-        const thread = this.state.threads.get(id);
+        const thread = this.state.deleted.has(id) ? undefined : this.state.threads.get(id);
         if (!thread) {
             throw new WireFailure(404, "not-found", `no thread ${id}`);
         }

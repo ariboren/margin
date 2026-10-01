@@ -37,17 +37,76 @@ export function openCommands(
     return commands;
 }
 
+/**
+ * Runs one command; resolves with its exit code, plus stdout when `capture` is set. Rejects if the
+ * binary is missing. Only capture from commands that exit on their own: `xdg-open` can hand the
+ * inherited stdout to the browser, so reading it to EOF would wait for the browser to quit.
+ */
+export type Run = (argv: string[], capture: boolean) => Promise<{ code: number; stdout: string }>;
+
+async function spawnRun(
+    argv: string[],
+    capture: boolean,
+): Promise<{ code: number; stdout: string }> {
+    if (!capture) {
+        const proc = Bun.spawn(argv, { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+        return { code: await proc.exited, stdout: "" };
+    }
+    const proc = Bun.spawn(argv, { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+    const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    return { code, stdout };
+}
+
+/** The new tab's page id from `orca tab create --json` output, or undefined when absent. */
+export function createdPageId(stdout: string): string | undefined {
+    try {
+        const parsed: unknown = JSON.parse(stdout);
+        const id = (parsed as { result?: { browserPageId?: unknown } } | null)?.result
+            ?.browserPageId;
+        return typeof id === "string" && id !== "" ? id : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * `tab create` opens the tab behind whatever the user is looking at, so bring it forward. The
+ * tab is already open, so any failure here leaves it open but unfocused.
+ */
+async function focusOrcaTab(orca: string[], createStdout: string, run: Run): Promise<void> {
+    const id = createdPageId(createStdout);
+    if (!id) {
+        return;
+    }
+    try {
+        await run([...orca, "tab", "switch", "--page", id, "--focus", "--json"], false);
+    } catch {
+        // Unfocused is still opened.
+    }
+}
+
 /** Runs the first opener that succeeds. Failing to open is not an error: the URL is printed. */
-export async function openTab(url: string, env: Env = process.env): Promise<Opener> {
+export async function openTab(
+    url: string,
+    env: Env = process.env,
+    run: Run = spawnRun,
+): Promise<Opener> {
     for (const { opener, argv } of openCommands(url, env)) {
+        let result: { code: number; stdout: string };
         try {
-            const proc = Bun.spawn(argv, { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
-            if ((await proc.exited) === 0) {
-                return opener;
-            }
+            result = await run(argv, opener === "orca");
         } catch {
             // Binary not installed; try the next.
+            continue;
         }
+        if (result.code !== 0) {
+            continue;
+        }
+        const orca = orcaCli(env);
+        if (opener === "orca" && orca) {
+            await focusOrcaTab(orca, result.stdout, run);
+        }
+        return opener;
     }
     return "none";
 }
