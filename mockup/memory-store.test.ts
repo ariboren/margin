@@ -414,6 +414,27 @@ describe("memory store verdict and finish", () => {
     });
 });
 
+describe("scripted agent", () => {
+    test("settles every thread of a finish request, so the doc can be approved", async () => {
+        const { store, clock } = setup();
+        const first = await store.comment({ text: "Sort this out" });
+        clock.advance(1_000);
+        expect(thread(store, first).state).toBe("replied");
+        await store.setHold(true);
+        const held = await store.comment({
+            anchor: anchorOn(store, "something plain"),
+            text: "And this",
+        });
+        expect(thread(store, held).state).toBe("draft");
+
+        expect((await store.requestFinish()).ids).toEqual([first, held]);
+        clock.advance(5_000);
+        expect(store.snapshot().threads.filter(isUnresolved)).toEqual([]);
+        expect(thread(store, held).messages.at(-1)?.by).toBe("agent");
+        expect(await store.setVerdict({ state: "approved" })).toEqual({ ok: true });
+    });
+});
+
 describe("proposeEdit", () => {
     test("drops an aside, then a filler word, then a trailing clause", () => {
         expect(proposeEdit("A thing (an aside) here.")).toBe("A thing here.");

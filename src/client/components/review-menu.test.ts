@@ -1,0 +1,208 @@
+import { describe, expect, test } from "bun:test";
+import { hashText } from "../../core/blocks.ts";
+import { MemoryStore } from "../../../mockup/memory-store.ts";
+import { reviewModel, type ReviewModel } from "../view-model.ts";
+import {
+    asIsWarning,
+    canAskToFinish,
+    finishOutcome,
+    finishPreview,
+    kindLines,
+    labelText,
+    reviewLabel,
+    unappliedLine,
+    unresolvedHead,
+} from "./review-menu.tsx";
+
+const none = { agent: 0, user: 0, suggestion: 0, draft: 0 };
+
+function model(change: Partial<ReviewModel> = {}): ReviewModel {
+    return {
+        state: "open",
+        unresolved: [],
+        counts: none,
+        changed: false,
+        accepts: 0,
+        hands: 0,
+        ...change,
+    };
+}
+
+describe("reviewLabel", () => {
+    const text = (change: Partial<ReviewModel>) => labelText(reviewLabel(model(change)));
+
+    test("an open doc reads Review, with threads unresolved or not", () => {
+        expect(reviewLabel(model())).toEqual({ tone: "open", lead: "Review", rest: "" });
+        expect(text({ unresolved: ["c1"] })).toBe("Review");
+    });
+
+    test("a verdict is the label; only an approval carries changed since", () => {
+        expect(text({ state: "approved" })).toBe("Approved");
+        expect(reviewLabel(model({ state: "approved", changed: true }))).toEqual({
+            tone: "approved",
+            lead: "Approved",
+            rest: ", changed since",
+            badge: "",
+        });
+        expect(reviewLabel(model({ state: "dropped", changed: true }))).toEqual({
+            tone: "dropped",
+            lead: "Dropped",
+            rest: "",
+        });
+    });
+
+    test("a finish request counts down, then reads ready once nothing is unresolved", () => {
+        const finishing = model({ unresolved: ["c1", "c2"], finish: { total: 3, remaining: 2 } });
+        expect(reviewLabel(finishing)).toEqual({
+            tone: "finishing",
+            lead: "Finishing",
+            rest: ", 2 left",
+            badge: "2",
+        });
+        expect(reviewLabel(model({ finish: { total: 3, remaining: 0 } }))).toEqual({
+            tone: "ready",
+            lead: "Ready",
+            rest: " to approve",
+        });
+    });
+
+    test("a settled finish request with newer threads unresolved is back to Review", () => {
+        expect(text({ unresolved: ["c7"], finish: { total: 3, remaining: 0 } })).toBe("Review");
+    });
+});
+
+describe("popover copy", () => {
+    test("only the kinds present, singular and plural", () => {
+        expect(kindLines({ agent: 2, user: 1, suggestion: 1, draft: 1 })).toEqual([
+            "2 comments waiting on your agent",
+            "1 agent reply waiting on you",
+            "1 pending suggestion",
+            "1 held draft",
+        ]);
+        expect(kindLines({ agent: 1, user: 3, suggestion: 0, draft: 2 })).toEqual([
+            "1 comment waiting on your agent",
+            "3 agent replies waiting on you",
+            "2 held drafts",
+        ]);
+        expect(kindLines(none)).toEqual([]);
+    });
+
+    test("the head counts the threads, or says the agent has them all", () => {
+        expect(unresolvedHead(model({ unresolved: ["c1"] }))).toBe("1 thread is unresolved");
+        expect(unresolvedHead(model({ unresolved: ["c1", "c2"] }))).toBe(
+            "2 threads are unresolved",
+        );
+        const finishing: Partial<ReviewModel> = {
+            unresolved: ["c1", "c2"],
+            finish: { total: 2, remaining: 2 },
+        };
+        expect(unresolvedHead(model(finishing))).toBe("Your agent is finishing 2 threads");
+        const mixed: Partial<ReviewModel> = {
+            unresolved: ["c1", "c2"],
+            finish: { total: 2, remaining: 1 },
+        };
+        expect(unresolvedHead(model(mixed))).toBe("2 threads are unresolved");
+    });
+
+    test("approve as is says what it leaves undone", () => {
+        expect(asIsWarning(5)).toBe(
+            "Closes the 5 threads without action. Pending suggestions are not applied.",
+        );
+        expect(asIsWarning(1)).toBe(
+            "Closes the thread without action. Pending suggestions are not applied.",
+        );
+    });
+
+    test("the finish preview follows the numbers and is absent with none", () => {
+        expect(finishPreview(1, 4)).toBe(
+            "Accepts 1 pending suggestion now and sends 4 threads to your agent. You approve after.",
+        );
+        expect(finishPreview(0, 4)).toBe("Sends 4 threads to your agent. You approve after.");
+        expect(finishPreview(0, 1)).toBe("Sends 1 thread to your agent. You approve after.");
+        expect(finishPreview(2, 0)).toBe("Accepts 2 pending suggestions now. You approve after.");
+        expect(finishPreview(0, 0)).toBeNull();
+    });
+
+    test("the finish outcome follows the numbers too", () => {
+        expect(finishOutcome(1, 4)).toBe("Accepted 1 suggestion. Sent 4 threads to your agent.");
+        expect(finishOutcome(0, 1)).toBe("Sent 1 thread to your agent.");
+        expect(finishOutcome(2, 0)).toBe("Accepted 2 suggestions.");
+        expect(finishOutcome(0, 0)).toBe("Nothing was left to send.");
+        expect(unappliedLine(1)).toBe("1 suggestion could not be applied and went to your agent");
+        expect(unappliedLine(2)).toBe("2 suggestions could not be applied and went to your agent");
+    });
+
+    test("asking to finish is offered until the agent already has every thread", () => {
+        const counts = { ...none, agent: 2 };
+        const handed: Partial<ReviewModel> = {
+            unresolved: ["c1", "c2"],
+            counts,
+            finish: { total: 2, remaining: 2 },
+        };
+        expect(canAskToFinish(model({ unresolved: ["c1", "c2"], counts }))).toBe(true);
+        expect(canAskToFinish(model(handed))).toBe(false);
+        expect(canAskToFinish(model({ ...handed, counts: { ...none, agent: 1, user: 1 } }))).toBe(
+            true,
+        );
+        expect(canAskToFinish(model({ ...handed, unresolved: ["c1", "c2", "c3"] }))).toBe(true);
+        expect(canAskToFinish(model())).toBe(false);
+    });
+});
+
+describe("against the store", () => {
+    const source = "# Title\n\nThe first paragraph says something plain.\n";
+    const read = (store: MemoryStore) => {
+        const snapshot = store.snapshot();
+        return reviewModel(snapshot, hashText(snapshot.doc.source));
+    };
+
+    test("the unresolved total is what an approval is refused on", async () => {
+        const store = new MemoryStore("doc.md", source);
+        const open = await store.comment({ text: "A doc note" });
+        const replied = await store.comment({ text: "Another" });
+        store.agentReply(replied, "Noted.");
+        const done = await store.comment({ text: "Settled" });
+        await store.resolve(done);
+        const gone = await store.comment({ text: "Deleted" });
+        await store.deleteThread(gone);
+        await store.setHold(true);
+        const held = await store.comment({ text: "Held" });
+
+        const before = read(store);
+        expect(before.unresolved).toEqual([open, replied, held]);
+        expect(await store.setVerdict({ state: "approved" })).toEqual({
+            ok: false,
+            reason: "unresolved",
+            ids: before.unresolved,
+        });
+    });
+
+    test("the label follows a finish request through to the approval and an edit after", async () => {
+        const store = new MemoryStore("doc.md", source);
+        const label = () => labelText(reviewLabel(read(store)));
+        const first = await store.comment({ text: "One" });
+        const second = await store.comment({ text: "Two" });
+        expect(label()).toBe("Review");
+
+        const preview = read(store);
+        const result = await store.requestFinish();
+        expect(result.ids).toHaveLength(preview.hands);
+        expect(label()).toBe("Finishing, 2 left");
+        store.agentResolve(first);
+        expect(label()).toBe("Finishing, 1 left");
+        store.agentResolve(second);
+        expect(label()).toBe("Ready to approve");
+
+        await store.setVerdict({ state: "approved" });
+        expect(label()).toBe("Approved");
+        const { doc } = store.snapshot();
+        const start = doc.source.indexOf("plain");
+        store.simulateOutsideChange({ start, end: start + 5 }, "simple");
+        expect(label()).toBe("Approved, changed since");
+
+        await store.setVerdict({ state: "dropped" });
+        expect(label()).toBe("Dropped");
+        await store.setVerdict({ state: "open" });
+        expect(label()).toBe("Review");
+    });
+});

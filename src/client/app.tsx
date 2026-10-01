@@ -40,6 +40,7 @@ import {
     anchoredThreads,
     buildView,
     editRange,
+    firstUnresolved,
     stalledThreads,
     threadPosition,
     unitFor,
@@ -435,6 +436,7 @@ export function App({
                 openThreads={view.order.length}
                 settled={view.settled + replacements.placed.length}
                 onSelectThread={selectThread}
+                firstUnresolved={firstUnresolved(view, snapshot.threads)}
             />
             <Banners store={store} snapshot={snapshot} />
             {editing.overlay}

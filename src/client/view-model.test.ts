@@ -1,17 +1,27 @@
 import { describe, expect, test } from "bun:test";
 import { createAnchor } from "../core/anchor.ts";
-import { parseDoc } from "../core/blocks.ts";
-import type { DocSnapshot, Event, EventInput, Thread, ThreadState } from "../core/model.ts";
-import { foldLog } from "../core/threads.ts";
+import { hashText, parseDoc } from "../core/blocks.ts";
+import type {
+    DocSnapshot,
+    Event,
+    EventInput,
+    Thread,
+    ThreadId,
+    ThreadState,
+} from "../core/model.ts";
+import { foldLog, unresolvedThreads } from "../core/threads.ts";
 import {
     anchoredThreads,
     buildView,
     docNotes,
     docNotesBusy,
+    firstUnresolved,
     headingSlugs,
     latestAgentSeq,
     needsDeleteConfirm,
+    reviewModel,
     threadStatus,
+    unresolvedKind,
 } from "./view-model.ts";
 
 const source = "# Title\n\nOne sentence here. Another sentence there.\n";
@@ -266,5 +276,151 @@ describe("doc notes in the view", () => {
         expect(docNotesBusy([note("c7", "open", undefined, seen)], now)).toBe(true);
         expect(docNotesBusy([note("c7", "working")], now)).toBe(true);
         expect(docNotesBusy([note("c7", "replied", 3, seen)], now)).toBe(false);
+    });
+});
+
+describe("reviewModel", () => {
+    const hash = hashText(source);
+    const at = "2026-09-30T12:00:00Z";
+
+    test("an open doc with nothing unresolved has nothing to count", () => {
+        const model = reviewModel(snapshotWith(["resolved"]), hash);
+        expect(model).toMatchObject({ state: "open", unresolved: [], accepts: 0, hands: 0 });
+        expect(model.verdict).toBeUndefined();
+        expect(model.finish).toBeUndefined();
+    });
+
+    test("each unresolved thread is one kind, the agent's pending suggestion first after a draft", () => {
+        const snapshot = snapshotWith(["draft", "open", "working", "replied", "replied", "open"]);
+        const [, , , , suggested, own] = snapshot.threads;
+        suggested!.suggestion = { seq: 9, by: "agent", replace: "x", status: "pending" };
+        own!.suggestion = { seq: 10, by: "user", replace: "y", status: "pending" };
+        expect(snapshot.threads.map(unresolvedKind)).toEqual([
+            "draft",
+            "agent",
+            "agent",
+            "user",
+            "suggestion",
+            "agent",
+        ]);
+        const model = reviewModel(snapshot, hash);
+        expect(model.counts).toEqual({ agent: 3, user: 1, suggestion: 1, draft: 1 });
+        expect(model).toMatchObject({ accepts: 1, hands: 5 });
+    });
+
+    test("a rejected or accepted suggestion is not pending", () => {
+        const snapshot = snapshotWith(["replied", "open"]);
+        snapshot.threads[0]!.suggestion = { seq: 3, by: "agent", replace: "x", status: "rejected" };
+        snapshot.threads[1]!.suggestion = { seq: 4, by: "agent", replace: "x", status: "accepted" };
+        expect(snapshot.threads.map(unresolvedKind)).toEqual(["user", "agent"]);
+    });
+
+    test("the counts add up to exactly the threads the server refuses an approval on", () => {
+        const log: Event[] = [];
+        const append = (...inputs: EventInput[]) => {
+            for (const input of inputs) {
+                const seq = log.length + 1;
+                log.push({ ...input, seq, at } as Event);
+            }
+        };
+        const anchor = createAnchor(source, { start: 9, end: 21 });
+        const comment = (id: ThreadId, draft = false): EventInput => ({
+            type: "comment",
+            by: "user",
+            id,
+            anchor,
+            text: "Why?",
+            draft,
+        });
+        append(
+            comment("c1"),
+            comment("c2"),
+            comment("c3"),
+            comment("c4"),
+            comment("c5"),
+            comment("c6", true),
+            comment("c7"),
+            { type: "comment", by: "user", id: "c8", text: "A doc note", draft: false },
+            { type: "claim", by: "agent", ids: ["c2"] },
+            { type: "reply", by: "agent", id: "c3", text: "Because." },
+            { type: "suggest", by: "agent", id: "c4", replace: "One line", apply: false },
+            { type: "resolve", by: "user", id: "c5" },
+            { type: "delete", by: "user", id: "c7" },
+        );
+        const state = foldLog(log);
+        const refused = unresolvedThreads(state).map((thread) => thread.id);
+        const snapshot: DocSnapshot = {
+            ...snapshotWith([]),
+            threads: [...state.threads.values()].filter((thread) => !state.deleted.has(thread.id)),
+        };
+        const model = reviewModel(snapshot, hash);
+        expect(model.unresolved).toEqual(refused);
+        expect(refused).toEqual(["c1", "c2", "c3", "c4", "c6", "c8"]);
+        const total = Object.values(model.counts).reduce((sum, each) => sum + each, 0);
+        expect(total).toBe(refused.length);
+        expect(model.counts).toEqual({ agent: 3, user: 1, suggestion: 1, draft: 1 });
+        expect(model.accepts + model.hands).toBe(refused.length);
+    });
+
+    test("changed since is for an approved doc whose hash moved", () => {
+        const approved = { state: "approved" as const, seq: 2, at, hash };
+        const snapshot = { ...snapshotWith(["resolved"]), verdict: approved };
+        expect(reviewModel(snapshot, hash)).toMatchObject({ state: "approved", changed: false });
+        expect(reviewModel(snapshot, "0badf00d")).toMatchObject({ changed: true });
+        expect(reviewModel(snapshot, hash).verdict).toEqual(approved);
+    });
+
+    test("a dropped doc is never changed, nor is a verdict that recorded no hash", () => {
+        const base = snapshotWith(["open"]);
+        const dropped = { ...base, verdict: { state: "dropped" as const, seq: 2, at, hash } };
+        expect(reviewModel(dropped, "0badf00d").changed).toBe(false);
+        const bare = { ...base, verdict: { state: "approved" as const, seq: 2, at } };
+        expect(reviewModel(bare, "0badf00d").changed).toBe(false);
+    });
+
+    test("an automatic reopen reads as open, with no standing verdict", () => {
+        const snapshot = {
+            ...snapshotWith(["open"]),
+            verdict: { state: "open" as const, seq: 5, at },
+        };
+        const model = reviewModel(snapshot, "0badf00d");
+        expect(model).toMatchObject({ state: "open", changed: false });
+        expect(model.verdict).toBeUndefined();
+    });
+
+    test("finish progress counts the request's threads still unresolved", () => {
+        const snapshot: DocSnapshot = {
+            ...snapshotWith(["open", "resolved", "open"]),
+            finish: { seq: 4, at, ids: ["c1", "c2", "c9"] },
+        };
+        expect(reviewModel(snapshot, hash).finish).toEqual({ total: 3, remaining: 1 });
+        snapshot.threads[0]!.state = "resolved";
+        const done = reviewModel(snapshot, hash);
+        expect(done.finish).toEqual({ total: 3, remaining: 0 });
+        expect(done.unresolved).toEqual(["c3"]);
+    });
+
+    test("a finish request is ignored once a verdict stands", () => {
+        const snapshot: DocSnapshot = {
+            ...snapshotWith(["open"]),
+            verdict: { state: "dropped", seq: 6, at, hash },
+            finish: { seq: 4, at, ids: ["c1"] },
+        };
+        expect(reviewModel(snapshot, hash).finish).toBeUndefined();
+    });
+});
+
+describe("firstUnresolved", () => {
+    test("the first thread in document order", () => {
+        const snapshot = snapshotWith(["resolved", "open"]);
+        expect(firstUnresolved(buildView(snapshot), snapshot.threads)).toBe("c2");
+    });
+
+    test("a doc note when no anchored thread is left, nothing when all are settled", () => {
+        const snapshot = snapshotWith(["resolved", "replied"]);
+        snapshot.threads[1]!.anchor = undefined;
+        expect(firstUnresolved(buildView(snapshot), snapshot.threads)).toBe("c2");
+        const settled = snapshotWith(["resolved"]);
+        expect(firstUnresolved(buildView(settled), settled.threads)).toBeUndefined();
     });
 });

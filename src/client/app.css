@@ -199,7 +199,7 @@
 
     .doc-name-button {
         display: block;
-        max-width: 40vw;
+        max-width: min(40vw, 100%);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -401,6 +401,11 @@
         min-width: 0;
     }
 
+    /* The controls keep their size, so a bar that runs out of room shortens the doc name. */
+    .topbar-end {
+        flex: none;
+    }
+
     .topbar-divider {
         width: 1px;
         height: 18px;
@@ -457,6 +462,292 @@
         letter-spacing: 0.06em;
         text-transform: uppercase;
         color: var(--muted);
+    }
+
+    /* The review control: its label is the doc's status, its popover the ways to change it. */
+    .review {
+        position: relative;
+        display: inline-flex;
+    }
+
+    .review-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px 4px 8px;
+        border-radius: 7px;
+        border: 1px solid var(--rule-strong);
+        background: transparent;
+        color: var(--ink-soft);
+        font: inherit;
+        font-size: 12.5px;
+        font-weight: 550;
+        white-space: nowrap;
+    }
+
+    .review-toggle:hover {
+        background: var(--paper-sunk);
+        color: var(--ink);
+    }
+
+    .review-mark {
+        width: 14px;
+        height: 14px;
+        flex: none;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.5;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+
+    .review-open .review-mark {
+        color: var(--muted);
+    }
+
+    .review-approved,
+    .review-approved:hover {
+        border-color: transparent;
+        background: var(--ok-bg);
+        color: var(--ok);
+    }
+
+    .review-dropped,
+    .review-dropped:hover {
+        border-color: transparent;
+        background: var(--paper-sunk);
+        color: var(--muted);
+    }
+
+    .review-finishing,
+    .review-finishing:hover {
+        border-color: transparent;
+        background: var(--agent-soft);
+        color: var(--agent);
+    }
+
+    .review-ready,
+    .review-ready:hover {
+        border-color: var(--ink);
+        background: var(--ink);
+        color: var(--paper);
+    }
+
+    .review-dot {
+        width: 7px;
+        height: 7px;
+        margin: 0 3px;
+        flex: none;
+        border-radius: 50%;
+        background: var(--agent);
+        animation: pulse 1.6s ease-in-out infinite;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .review-dot {
+            animation: none;
+        }
+    }
+
+    /* The narrow bar's stand-in for the rest of the label; the full label needs none. */
+    .review-badge {
+        display: none;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .review-badge:empty {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--warn);
+    }
+
+    .review-popover {
+        gap: 10px;
+        padding: 14px;
+        font-size: 12.5px;
+        line-height: 1.45;
+        color: var(--ink-soft);
+    }
+
+    .review-popover:focus {
+        outline: none;
+    }
+
+    .review-popover p {
+        margin: 0;
+    }
+
+    .review-head {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--ink);
+    }
+
+    .review-kinds {
+        display: grid;
+        gap: 2px;
+        margin: -6px 0 0;
+        padding: 0;
+        list-style: none;
+        color: var(--muted);
+    }
+
+    .review-quiet {
+        color: var(--muted);
+    }
+
+    .review-quote {
+        padding-inline-start: 10px;
+        border-inline-start: 2px solid var(--rule-strong);
+        color: var(--ink);
+        overflow-wrap: anywhere;
+    }
+
+    .review-notice {
+        padding: 6px 10px;
+        border-radius: 6px;
+        background: var(--warn-bg);
+        color: var(--warn);
+    }
+
+    .review-paths {
+        display: grid;
+        gap: 2px;
+        margin: 0 -6px;
+        padding: 4px 0;
+        border-block: 1px solid var(--rule);
+    }
+
+    .review-path {
+        display: grid;
+        gap: 2px;
+        padding: 7px 6px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--ink);
+        font: inherit;
+        text-align: start;
+    }
+
+    .review-path:hover {
+        background: var(--paper-sunk);
+    }
+
+    .review-path:disabled {
+        opacity: 0.5;
+        cursor: default;
+    }
+
+    .review-path strong {
+        font-weight: 600;
+    }
+
+    .review-path small {
+        font-size: 12px;
+        color: var(--muted);
+    }
+
+    .review-note {
+        width: 100%;
+        padding: 6px 9px;
+        border: 1px solid var(--rule-strong);
+        border-radius: 7px;
+        background: var(--paper);
+        color: var(--ink);
+        font: inherit;
+    }
+
+    .review-note::placeholder {
+        color: var(--muted);
+    }
+
+    .review-actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 8px;
+    }
+
+    .review-unapplied {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 4px 10px;
+    }
+
+    /* A tight bar keeps the label's first word, then only its mark; the words it drops stay
+       readable to assistive technology. */
+    @media (max-width: 900px) {
+        .review-toggle {
+            padding: 4px 8px 4px 6px;
+            gap: 5px;
+        }
+
+        .review-rest {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+        }
+
+        .review-badge {
+            display: inline-block;
+        }
+    }
+
+    @media (max-width: 640px) {
+        /* Hung from the bar instead of the control, which sits too far left for a 328 px box. */
+        .review {
+            position: static;
+        }
+
+        .review-popover {
+            top: calc(100% + 6px);
+            left: 12px;
+            right: 12px;
+            width: auto;
+        }
+    }
+
+    @media (max-width: 720px) {
+        .review-toggle {
+            min-width: 30px;
+            height: 30px;
+            justify-content: center;
+            padding: 0 7px;
+        }
+
+        .review-lead {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+        }
+    }
+
+    /* The detached action takes the room the first word had. */
+    @media (min-width: 721px) and (max-width: 900px) {
+        .review-crowded .review-toggle {
+            min-width: 30px;
+            height: 30px;
+            justify-content: center;
+            padding: 0 7px;
+        }
+
+        .review-crowded .review-lead {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+        }
     }
 
     .setting-row {
@@ -2355,7 +2646,7 @@
         }
 
         .doc-name-button {
-            max-width: 26vw;
+            max-width: min(26vw, 100%);
         }
 
         /* No deeper than the narrow gap, so the name's hover never overlaps the outline button. */

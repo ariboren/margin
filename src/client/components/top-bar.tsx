@@ -3,10 +3,12 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type { DocSnapshot, DocStore, ThreadId } from "../../core/model.ts";
 import type { EditOn, Scale, ViewPrefs } from "../preferences.ts";
 import { describeEntry, type UndoStack } from "../undo.ts";
+import { isDetached } from "../view-model.ts";
 import { AgentChip, type AgentChipModel } from "./agent-chip.tsx";
 import { DetachedAction } from "./detached-action.tsx";
 import { DocName, type DocLocation } from "./doc-name.tsx";
 import { RequestToast } from "./request-toast.tsx";
+import { ReviewMenu } from "./review-menu.tsx";
 import { Tooltip } from "./tooltip.tsx";
 
 interface TopBarProps {
@@ -33,8 +35,10 @@ interface TopBarProps {
     openThreads: number;
     /** Resolved threads and the user's own edit cards, which the show-resolved setting governs. */
     settled: number;
-    /** Selects and scrolls to a thread; the stalled chip uses it. */
+    /** Selects and scrolls to a thread; the stalled chip and the review menu use it. */
     onSelectThread: (id: ThreadId) => void;
+    /** Where the review menu's "step through them" starts. */
+    firstUnresolved: ThreadId | undefined;
 }
 
 export function TopBar(props: TopBarProps): JSX.Element {
@@ -63,6 +67,15 @@ export function TopBar(props: TopBarProps): JSX.Element {
                 <div class="topbar-end">
                     <DetachedAction store={store} snapshot={snapshot} undo={props.undo} />
                     {props.undo ? <UndoButtons stack={props.undo} /> : null}
+                    <ReviewMenu
+                        store={store}
+                        snapshot={snapshot}
+                        now={props.now}
+                        first={props.firstUnresolved}
+                        agentAway={props.chip.kind === "none" || props.chip.kind === "disconnected"}
+                        crowded={snapshot.threads.some(isDetached)}
+                        onSelectThread={props.onSelectThread}
+                    />
                     <span class="hold">
                         <Tooltip text={liveTip}>
                             {(tip) => (

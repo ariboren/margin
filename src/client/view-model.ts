@@ -5,7 +5,9 @@ import { docTree, flattenUnits, unitAt } from "../core/blocks.ts";
 import { netEdits } from "../core/diff.ts";
 import {
     isDocNote,
+    isUnresolved,
     type DocSnapshot,
+    type DocVerdict,
     type EditEvent,
     type Offset,
     type Range,
@@ -13,6 +15,7 @@ import {
     type ThreadId,
     type ThreadState,
     type Unit,
+    type VerdictState,
 } from "../core/model.ts";
 
 type DecorationKind = "comment" | "draft" | "suggest" | "applied" | "pending" | "resolved";
@@ -268,4 +271,76 @@ export function unitFor(snapshot: DocSnapshot, offset: Offset): Unit | undefined
 /** Working threads with no activity for the stall window, in thread order. */
 export function stalledThreads(threads: readonly Thread[], now: number): ThreadId[] {
     return threads.filter((thread) => isStalled(thread, now)).map((thread) => thread.id);
+}
+
+/** What an unresolved thread is waiting on, as the review popover counts it. */
+export type UnresolvedKind = "agent" | "user" | "suggestion" | "draft";
+
+export const unresolvedKinds: readonly UnresolvedKind[] = ["agent", "user", "suggestion", "draft"];
+
+/**
+ * One kind per thread, so the counts add up to the total. Only the agent's pending suggestion
+ * counts as one: a finish request accepts those, and hands the user's own to the agent.
+ */
+export function unresolvedKind(thread: Thread): UnresolvedKind {
+    if (thread.state === "draft") {
+        return "draft";
+    }
+    if (thread.suggestion?.by === "agent" && thread.suggestion.status === "pending") {
+        return "suggestion";
+    }
+    return thread.state === "replied" ? "user" : "agent";
+}
+
+export interface ReviewModel {
+    state: VerdictState;
+    /** The standing verdict; absent while the doc is open. */
+    verdict?: DocVerdict;
+    /** Every thread an approval would be refused on, in thread order. */
+    unresolved: ThreadId[];
+    counts: Record<UnresolvedKind, number>;
+    /** An approved doc whose text is no longer what was approved. Nothing depends on a dropped doc's text. */
+    changed: boolean;
+    /** The finish request on an open doc: how many threads it handed over, how many are left. */
+    finish?: { total: number; remaining: number };
+    /** What a finish request would do now: suggestions margin accepts, threads the agent gets. */
+    accepts: number;
+    hands: number;
+}
+
+/** `hash` is `hashText` of the doc source; the caller memoises it, since it scans the whole doc. */
+export function reviewModel(snapshot: DocSnapshot, hash: string): ReviewModel {
+    const state = snapshot.verdict?.state ?? "open";
+    const unresolved = snapshot.threads.filter(isUnresolved);
+    const counts: Record<UnresolvedKind, number> = { agent: 0, user: 0, suggestion: 0, draft: 0 };
+    for (const thread of unresolved) {
+        counts[unresolvedKind(thread)] += 1;
+    }
+    const ids = new Set(unresolved.map((thread) => thread.id));
+    const { verdict, finish } = snapshot;
+    return {
+        state,
+        ...(verdict && state !== "open" ? { verdict } : {}),
+        unresolved: [...ids],
+        counts,
+        changed: state === "approved" && verdict?.hash !== undefined && verdict.hash !== hash,
+        ...(finish && state === "open"
+            ? {
+                  finish: {
+                      total: finish.ids.length,
+                      remaining: finish.ids.filter((id) => ids.has(id)).length,
+                  },
+              }
+            : {}),
+        accepts: counts.suggestion,
+        hands: unresolved.length - counts.suggestion,
+    };
+}
+
+/**
+ * Where "step through them" starts: the first thread in document order, else the oldest
+ * unresolved doc note, which has no place in that order.
+ */
+export function firstUnresolved(view: DocView, threads: readonly Thread[]): ThreadId | undefined {
+    return view.order[0] ?? threads.find(isUnresolved)?.id;
 }

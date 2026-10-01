@@ -1,7 +1,7 @@
 import type { JSX } from "preact";
 import { useState } from "preact/hooks";
 import { flattenUnits } from "../src/core/blocks.ts";
-import type { Range, Unit } from "../src/core/model.ts";
+import { isUnresolved, type Range, type Unit } from "../src/core/model.ts";
 import { proposeEdit } from "./agent.ts";
 import type { MemoryStore } from "./memory-store.ts";
 import { editable, plainPhrase } from "./seed.ts";
@@ -42,6 +42,12 @@ export function DemoMenu({ store }: { store: MemoryStore }): JSX.Element {
         }
     };
 
+    const resolveAll = () => {
+        for (const thread of store.snapshot().threads.filter(isUnresolved)) {
+            store.agentResolve(thread.id);
+        }
+    };
+
     return (
         <div class="demo">
             {open ? (
@@ -52,6 +58,9 @@ export function DemoMenu({ store }: { store: MemoryStore }): JSX.Element {
                     </button>
                     <button type="button" onClick={changeOnDisk}>
                         Change the file on disk
+                    </button>
+                    <button type="button" onClick={resolveAll}>
+                        Resolve every thread
                     </button>
                     <button type="button" onClick={() => store.ageWorking(11 * 60_000)}>
                         Fast-forward 11 minutes

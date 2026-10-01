@@ -36,6 +36,7 @@ const replies = {
     suggestion: "Here's a tighter version.",
     retry: "Understood. Here's another take.",
     applied: "Applied directly. Revert if it reads worse.",
+    finished: "Settled this one as part of finishing up.",
 };
 
 /**
@@ -68,6 +69,11 @@ export function attachScriptedAgent(
 function answer(store: MemoryStore, wake: Wake): void {
     const thread = store.snapshot().threads.find((candidate) => candidate.id === wake.id);
     if (!thread || thread.state === "resolved" || thread.state === "draft") {
+        return;
+    }
+    if (wake.reason === "finish") {
+        store.agentReply(thread.id, replies.finished);
+        store.agentResolve(thread.id);
         return;
     }
     const lastUser =
