@@ -82,7 +82,7 @@ margin setup --user    # ~/.claude/skills/margin/
 
 **Other agents.** `margin setup` also prints a snippet to paste into your `AGENTS.md`, which margin never edits itself. The same text is in [AGENTS.snippet.md](AGENTS.snippet.md). Any agent that can run shell commands can follow it, but only Claude Code has been tested end to end.
 
-**Who is answering.** The page shows the connected agent beside the filename, with its name on every reply. The name comes from `--as <name>` on any margin command, else the `MARGIN_AGENT` environment variable, else the client margin detects (Claude Code, Codex or Cursor, from the markers they set in their shells). Several agents on one doc each appear under their own name.
+**Who is answering.** The page shows the connected agent beside the filename, with its name on every reply. The name comes from `--as <name>` on any margin command, else the `MARGIN_AGENT` environment variable, else the title of the Claude Code session running the command (the one in its tab, so a renamed session shows under its new name), else the client margin detects (Claude Code, Codex or Cursor, from the markers they set in their shells). Several agents on one doc each appear under their own name.
 
 ```sh
 margin watch review.md --as foreman

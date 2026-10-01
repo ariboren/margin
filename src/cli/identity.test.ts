@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { detectClient, resolveAgent } from "./identity.ts";
 
 describe("detectClient", () => {
@@ -34,5 +37,64 @@ describe("resolveAgent", () => {
 
     test("an empty --as falls through to the next source", () => {
         expect(resolveAgent({ as: " ", env: { MARGIN_AGENT: "x" } }).name).toBe("x");
+    });
+});
+
+describe("Claude Code session title", () => {
+    const sessionId = "9eaa6981-1816-430e-89b0-9d001c8d2f1f";
+
+    function claudeEnv(lines: object[], extra: Record<string, string> = {}) {
+        const home = mkdtempSync(join(tmpdir(), "margin-identity-"));
+        const project = join(home, ".claude/projects/-some-other-cwd");
+        mkdirSync(project, { recursive: true });
+        writeFileSync(
+            join(project, `${sessionId}.jsonl`),
+            lines.map((line) => `${JSON.stringify(line)}\n`).join(""),
+        );
+        return { CLAUDECODE: "1", CLAUDE_CODE_SESSION_ID: sessionId, HOME: home, ...extra };
+    }
+
+    test("the latest AI title names the agent", () => {
+        const env = claudeEnv([
+            { type: "ai-title", aiTitle: "First guess", sessionId },
+            { type: "user", message: { content: 'quoting "ai-title" in a prompt' } },
+            { type: "ai-title", aiTitle: "Margin theme review", sessionId },
+        ]);
+        expect(resolveAgent({ env })).toEqual({
+            name: "Margin theme review",
+            client: "claude-code",
+        });
+    });
+
+    test("a title the user set wins over a later AI title", () => {
+        const env = claudeEnv([
+            { type: "custom-title", customTitle: "margin foreman", sessionId },
+            { type: "ai-title", aiTitle: "Margin theme review", sessionId },
+        ]);
+        expect(resolveAgent({ env }).name).toBe("margin foreman");
+    });
+
+    test("--as and MARGIN_AGENT still come first", () => {
+        const env = claudeEnv([{ type: "ai-title", aiTitle: "Margin theme review", sessionId }], {
+            MARGIN_AGENT: "reviewer",
+        });
+        expect(resolveAgent({ as: "foreman", env }).name).toBe("foreman");
+        expect(resolveAgent({ env }).name).toBe("reviewer");
+    });
+
+    test("only a Claude Code session is looked up", () => {
+        const env = claudeEnv([{ type: "ai-title", aiTitle: "Margin theme review", sessionId }]);
+        expect(resolveAgent({ env: { ...env, CLAUDECODE: undefined } }).name).toBe("Agent");
+    });
+
+    test("no transcript, no title or an unusable id falls back to the client", () => {
+        const untitled = claudeEnv([{ type: "user", message: { content: "hi" } }]);
+        expect(resolveAgent({ env: untitled }).name).toBe("Claude Code");
+        expect(
+            resolveAgent({ env: { ...untitled, CLAUDE_CODE_SESSION_ID: "../../etc/passwd" } }).name,
+        ).toBe("Claude Code");
+        expect(resolveAgent({ env: { ...untitled, HOME: "/nonexistent-margin-home" } }).name).toBe(
+            "Claude Code",
+        );
     });
 });

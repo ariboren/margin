@@ -2,7 +2,7 @@
 
 Generated from `margin agent-help` by `bun run skill`; edit src/cli/agent-help.md.
 
-Pass `--as <name>` on every margin command, or set `MARGIN_AGENT`, so the page shows who is answering; without it the page names your client.
+The page names you after your session, the title in your tab, so leave `--as` and `MARGIN_AGENT` off unless the user asks for another name.
 
 ```text
 margin: review threads on a markdown doc. Use only these commands.
@@ -28,5 +28,5 @@ Text starting with -: --replace=- or -- before it.
 Acks: ok c3 replied|resolved;
 err c3 <reason>[; detail]: not-found|resolved|deleted|detached|no-anchor|not-unique|before-missing|locked.
 Id commands find the doc; on "pass the doc: a.md": margin reply a.md c3 "…".
---as <name> or MARGIN_AGENT names you in the page.
+The page names you by session title; --as <name> overrides.
 ```

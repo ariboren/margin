@@ -1,9 +1,11 @@
 // Who this agent is, for presence and for the events it writes: `--as`, then `MARGIN_AGENT`,
-// then the display name of the client that spawned us, which is read from the markers clients
-// set in their child processes.
+// then the title of the Claude Code session that spawned us (so the page says what the agent's
+// tab says), then the display name of the client, which is read from the markers clients set in
+// their child processes.
 import { cleanName, clientName } from "../core/agent.ts";
 import type { AgentClient, AgentIdentity } from "../core/model.ts";
 import type { Env } from "../server/open-tab.ts";
+import { sessionTitle } from "./claude-session.ts";
 
 /**
  * Claude Code first: it sets `CLAUDECODE` in every subprocess, and when it runs inside Cursor's
@@ -19,6 +21,10 @@ export function detectClient(env: Env): AgentClient {
 
 export function resolveAgent(input: { as?: string | undefined; env: Env }): AgentIdentity {
     const client = detectClient(input.env);
-    const name = cleanName(input.as) ?? cleanName(input.env.MARGIN_AGENT) ?? clientName(client);
+    const name =
+        cleanName(input.as) ??
+        cleanName(input.env.MARGIN_AGENT) ??
+        (client === "claude-code" ? cleanName(sessionTitle(input.env)) : undefined) ??
+        clientName(client);
     return { name, client };
 }

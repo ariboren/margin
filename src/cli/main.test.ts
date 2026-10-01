@@ -105,7 +105,10 @@ describe("every contract command against a temp dir with no daemon", () => {
             env: { MARGIN_AGENT: "reviewer" },
         });
         margin(["resolve", "doc.md", "c1"], { env: { MARGIN_AGENT: "reviewer", CLAUDECODE: "1" } });
-        margin(["pending", "doc.md"], { env: { MARGIN_AGENT: "", CLAUDECODE: "1" } });
+        // Run under Claude Code, the suite inherits a real session whose title would be the name.
+        margin(["pending", "doc.md"], {
+            env: { MARGIN_AGENT: "", CLAUDECODE: "1", CLAUDE_CODE_SESSION_ID: "" },
+        });
         const events = (await readLog(box.doc)).events;
         expect(events.filter((event) => event.by === "agent").map((event) => event.agent)).toEqual([
             expect.objectContaining({ name: "foreman" }),

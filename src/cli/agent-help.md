@@ -21,4 +21,4 @@ Text starting with -: --replace=- or -- before it.
 Acks: ok c3 replied|resolved;
 err c3 <reason>[; detail]: not-found|resolved|deleted|detached|no-anchor|not-unique|before-missing|locked.
 Id commands find the doc; on "pass the doc: a.md": margin reply a.md c3 "…".
---as <name> or MARGIN_AGENT names you in the page.
+The page names you by session title; --as <name> overrides.

@@ -20,7 +20,7 @@ const generated =
 
 /** Outside the fenced help, so the agent-help byte ceiling does not pay for it. */
 const naming =
-    "Pass `--as <name>` on every margin command, or set `MARGIN_AGENT`, so the page shows who is answering; without it the page names your client.";
+    "The page names you after your session, the title in your tab, so leave `--as` and `MARGIN_AGENT` off unless the user asks for another name.";
 
 function fenced(help: string): string {
     return `\`\`\`text\n${help.replace(/\n?$/, "\n")}\`\`\`\n`;
