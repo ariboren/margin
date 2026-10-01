@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import defaultCeilings from "../budget.json";
 import { decodeSource } from "../src/core/blocks.ts";
+import { byteLength } from "../src/core/diff.ts";
 import {
     editAllowance,
     measure,
@@ -68,8 +69,34 @@ describe("budget on the public sample", () => {
             keys: ["fullLoopTenThreads"],
             stdout: "approved\n",
         });
-        expect(measured.ops.filter((op) => op.name.startsWith("finish ack"))).toHaveLength(10);
-        expect(measured.finishBytes).toBeGreaterThan(0);
+    });
+
+    test("the finish pass is the watch line, one pending read and ten acks, outside the loop", () => {
+        const pass = measured.ops.filter((op) => op.keys.includes("finishTenThreads"));
+        expect(pass.map((op) => op.name)).toEqual([
+            "watch finish with ten threads",
+            "pending finish",
+            ...Array.from({ length: 10 }, (_, index) => `finish ack c${index + 1}`),
+        ]);
+        for (const op of pass) expect(op.keys).not.toContain("fullLoopTenThreads");
+        expect(pass[1]!.stdout).toStartWith("finish\nc1 ");
+        const bytes = pass.reduce((sum, op) => sum + byteLength(op.stdout), 0);
+        const row = report(measured, publicSource).rows.find(
+            (candidate) => candidate.key === "finishTenThreads",
+        );
+        expect(row).toEqual({ key: "finishTenThreads", bytes, ceiling: 5000, over: false });
+    });
+
+    test("a finish pass over its ceiling breaches that key only", () => {
+        const row = report(measured, publicSource).rows.find(
+            (candidate) => candidate.key === "finishTenThreads",
+        )!;
+        const ceilings: Ceilings = { ...defaultCeilings, finishTenThreads: row.bytes! - 1 };
+        const result = report(measured, publicSource, ceilings);
+        expect(result.breached).toBe(true);
+        expect(result.rows.filter((candidate) => candidate.over).map((r) => r.key)).toEqual([
+            "finishTenThreads",
+        ]);
     });
 
     test("a status line over the watch ceiling breaches it", () => {

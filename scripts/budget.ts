@@ -356,8 +356,6 @@ export interface Measured {
     statusLines: string[];
     /** The `pending` reads that open with the review header. */
     headed: string[];
-    /** A finish pass over all ten threads: the watch line, the `pending` read and ten acks. */
-    finishBytes: number;
     /** Thread blocks in the full `pending` that carry table-cell context. */
     cellThreads: number;
 }
@@ -443,27 +441,28 @@ export async function measure(source: string): Promise<Measured> {
 
     // The widest status lines: a doc word beside all ten threads, then all ten handed over. A
     // finish request leaves `reopened` out, so no line carries both. The finish pass reads every
-    // thread again, so it is a second loop and stays out of the first one's total.
-    let finishBytes = 0;
+    // thread again, so it is a second loop with a ceiling of its own (the watch line, the `pending`
+    // read and ten acks) and stays out of the first one's total.
     await inWorld(source, async (world) => {
         await seedComments(world, allIds);
-        const status = async (name: string): Promise<number> => {
+        const status = async (name: string, ...keys: BudgetKey[]): Promise<void> => {
             const line = await cli(world, "", "watch", "doc.md", "--once");
             statusLines.push(line);
-            ops.push({ name: `watch ${name}`, keys: ["watch"], stdout: line });
-            return byteLength(line);
+            ops.push({ name: `watch ${name}`, keys: ["watch", ...keys], stdout: line });
         };
         await seedVerdict(world, "declined");
         await status("declined with ten threads");
         const handed = await seedFinish(world);
-        finishBytes += await status("finish with ten threads");
+        await status("finish with ten threads", "finishTenThreads");
         const read = await cli(world, "", "pending", "doc.md");
         headed.push(read);
-        finishBytes += byteLength(read);
+        ops.push({ name: "pending finish", keys: ["finishTenThreads"], stdout: read });
         for (const id of handed) {
-            const ack = await cli(world, "", "resolve", id);
-            ops.push({ name: `finish ack ${id}`, keys: ["ack"], stdout: ack });
-            finishBytes += byteLength(ack);
+            ops.push({
+                name: `finish ack ${id}`,
+                keys: ["ack", "finishTenThreads"],
+                stdout: await cli(world, "", "resolve", id),
+            });
         }
         await seedVerdict(world, "approved");
         await status("approved");
@@ -477,7 +476,6 @@ export async function measure(source: string): Promise<Measured> {
         lines,
         statusLines,
         headed,
-        finishBytes,
         cellThreads: threadBlocks.filter((block) => block.includes("\n  header: ")).length,
     };
 }
@@ -501,7 +499,6 @@ export interface Report {
     rows: Row[];
     breached: boolean;
     pendingBytes: Measured["pendingBytes"];
-    finishBytes: number;
     shape: SampleShape;
 }
 
@@ -522,7 +519,9 @@ function median(values: number[]): number {
 
 function reduce(key: BudgetKey, values: number[]): number {
     if (key === "pendingThreadMedian") return median(values);
-    if (key === "fullLoopTenThreads") return values.reduce((sum, value) => sum + value, 0);
+    if (key === "fullLoopTenThreads" || key === "finishTenThreads") {
+        return values.reduce((sum, value) => sum + value, 0);
+    }
     return Math.max(...values);
 }
 
@@ -589,7 +588,6 @@ export function report(
         rows,
         breached: rows.some((row) => row.over),
         pendingBytes: measured.pendingBytes,
-        finishBytes: measured.finishBytes,
         shape: shape(source),
     };
 }
@@ -637,7 +635,6 @@ async function main(): Promise<void> {
     console.log(
         `pending --json ${json} B, plain text ${text} B (${text <= json ? "text" : "json"} smaller)`,
     );
-    console.log(`finish pass, ten threads ${result.finishBytes} B`);
     console.log(
         `shape: ${Object.entries(result.shape)
             .map(([key, value]) => `${key}=${value}`)
