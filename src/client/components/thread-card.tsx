@@ -19,6 +19,8 @@ interface ThreadCardProps {
     active: boolean;
     now: number;
     hold: boolean;
+    /** Just handed to a watching agent: reads as being answered ahead of the agent's claim. */
+    eager?: boolean;
     onActivate: () => void;
     /** Collapses the card again from its header; without it the header only expands. */
     onDeactivate?: () => void;
@@ -35,6 +37,7 @@ export function ThreadCard({
     active,
     now,
     hold,
+    eager = false,
     onActivate,
     onDeactivate,
     collapsible = true,
@@ -42,8 +45,10 @@ export function ThreadCard({
     followLink,
 }: ThreadCardProps): JSX.Element {
     const notice = apply.notice(thread);
-    const status = threadStatus(thread, now);
+    const status = threadStatus(thread, now, eager);
     const stalled = status === "stalled";
+    // The pill and the dots always agree: both follow the status, not the thread's own state.
+    const responding = status === "working" || stalled;
     const pending = thread.suggestion?.status === "pending" ? thread.suggestion : undefined;
     const expanded = active || !collapsible;
     const classes = [
@@ -63,12 +68,17 @@ export function ThreadCard({
                 onToggle={active ? onDeactivate : undefined}
                 pill={<span class={`pill pill-${status}`}>{statusLabels[status]}</span>}
                 meta={`${thread.id} · ${relativeTime(thread.lastActivity, now)}`}
-                summary={collapsible ? <Summary thread={thread} stalled={stalled} /> : undefined}
+                summary={
+                    collapsible ? (
+                        <Summary thread={thread} responding={responding && !stalled} />
+                    ) : undefined
+                }
             />
             {expanded ? (
                 <Body
                     thread={thread}
                     pending={pending}
+                    responding={responding}
                     stalled={stalled}
                     apply={apply}
                     followLink={followLink}
@@ -92,7 +102,7 @@ export function ThreadCard({
     );
 }
 
-function Summary({ thread, stalled }: { thread: Thread; stalled: boolean }): JSX.Element {
+function Summary({ thread, responding }: { thread: Thread; responding: boolean }): JSX.Element {
     // Keyed on what the summary reads: every snapshot brings new thread objects, and the preview
     // parses the last message's markdown.
     const last = thread.messages[thread.messages.length - 1];
@@ -105,7 +115,7 @@ function Summary({ thread, stalled }: { thread: Thread; stalled: boolean }): JSX
             {summary.speaker ? <span class="card-speaker">{summary.speaker}</span> : null}
             <span class="card-preview">
                 {summary.preview}
-                {thread.state === "working" && !stalled ? (
+                {responding ? (
                     <>
                         {" "}
                         <Dots />
@@ -149,13 +159,22 @@ interface BodyProps {
     store: DocStore;
     thread: Thread;
     pending: Suggestion | undefined;
+    responding: boolean;
     stalled: boolean;
     apply: ApplyControls;
     followLink: (event: MouseEvent, url: string) => void;
 }
 
 /** Everything between the header and the reply box: the quote, the messages, the suggestion. */
-function Body({ store, thread, pending, stalled, apply, followLink }: BodyProps): JSX.Element {
+function Body({
+    store,
+    thread,
+    pending,
+    responding,
+    stalled,
+    apply,
+    followLink,
+}: BodyProps): JSX.Element {
     const { messages } = thread;
     return (
         <>
@@ -179,7 +198,7 @@ function Body({ store, thread, pending, stalled, apply, followLink }: BodyProps)
                     </li>
                 ))}
             </ol>
-            {thread.state === "working" ? <Working stalled={stalled} /> : null}
+            {responding ? <Working stalled={stalled} /> : null}
             {pending ? (
                 <div class="suggestion-box">
                     <span class="suggestion-label">{suggestionLabel(pending.by)}</span>

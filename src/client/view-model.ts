@@ -107,13 +107,68 @@ export function isDetached(thread: Thread): boolean {
     return thread.detached && thread.state !== "resolved";
 }
 
-/** What a thread card's pill shows. */
-export function threadStatus(thread: Thread, now: number): ThreadStatus {
+/**
+ * How long a thread just handed to a watching agent reads as being answered, before the agent
+ * has claimed it. Past that, an unclaimed thread says what is true of it: notified, or open.
+ */
+export const EAGER_MS = 3_000;
+
+type Handed = Pick<DocSnapshot, "threads" | "edits">;
+
+/**
+ * When the user handed an open thread to the agent: its last activity, which a comment, a reply,
+ * a suggestion, a reject with a note, a reopen, a send and a finish request all set. An edit made
+ * on the thread (a revert, an undo) moves the last activity too and hands nothing over, so a
+ * thread whose last activity is an edit's has no such time.
+ */
+function handedAt(thread: Thread, edits: readonly EditEvent[]): number | null {
+    if (thread.state !== "open") {
+        return null;
+    }
+    const byEdit = edits.some((edit) => edit.id === thread.id && edit.at === thread.lastActivity);
+    return byEdit ? null : Date.parse(thread.lastActivity);
+}
+
+/**
+ * The open threads that read "Agent responding" ahead of the agent's claim: handed over less than
+ * `EAGER_MS` ago, with an agent watching the doc. The time is the thread's own, so a page loaded
+ * later than that never shows the eager label.
+ */
+export function eagerThreads(snapshot: Handed, watching: boolean, now: number): Set<ThreadId> {
+    const eager = new Set<ThreadId>();
+    if (!watching) {
+        return eager;
+    }
+    for (const thread of snapshot.threads) {
+        const at = handedAt(thread, snapshot.edits);
+        if (at !== null && now - at < EAGER_MS) {
+            eager.add(thread.id);
+        }
+    }
+    return eager;
+}
+
+/** When the first of the eager threads stops being eager, for the clock to wake at; else null. */
+export function eagerExpiry(snapshot: Handed, watching: boolean, now: number): number | null {
+    let first: number | null = null;
+    for (const id of eagerThreads(snapshot, watching, now)) {
+        const thread = snapshot.threads.find((candidate) => candidate.id === id)!;
+        const expiry = Date.parse(thread.lastActivity) + EAGER_MS;
+        first = first === null ? expiry : Math.min(first, expiry);
+    }
+    return first;
+}
+
+/** What a thread card's pill shows. `eager`: the thread is one of `eagerThreads`. */
+export function threadStatus(thread: Thread, now: number, eager = false): ThreadStatus {
     if (isDetached(thread)) {
         return "detached";
     }
     if (isStalled(thread, now)) {
         return "stalled";
+    }
+    if (eager && thread.state === "open") {
+        return "working";
     }
     if (isAgentNotified(thread)) {
         return "notified";
@@ -157,9 +212,13 @@ export function latestAgentSeq(threads: readonly Thread[]): number {
 }
 
 /** The agent is on a doc note: notified of it or responding to it. */
-export function docNotesBusy(notes: readonly Thread[], now: number): boolean {
+export function docNotesBusy(
+    notes: readonly Thread[],
+    now: number,
+    eager: ReadonlySet<ThreadId> = new Set(),
+): boolean {
     return notes.some((note) => {
-        const status = threadStatus(note, now);
+        const status = threadStatus(note, now, eager.has(note.id));
         return status === "notified" || status === "working";
     });
 }

@@ -39,6 +39,8 @@ import { useSnapshot } from "./use-snapshot.ts";
 import {
     anchoredThreads,
     buildView,
+    eagerExpiry,
+    eagerThreads,
     editRange,
     firstUnresolved,
     stalledThreads,
@@ -133,8 +135,11 @@ export function App({
     const [prefs, setPrefs] = useViewPrefs();
     const { showResolved } = prefs;
     const view = useMemo(() => buildView(snapshot, showResolved), [snapshot, showResolved]);
-    const now = useNow();
     const presence = usePresence(store, snapshot);
+    // The reading that makes the chip connected: an agent here, or gone within the grace period.
+    const watching = agentChipFor(presence.state, [], presence.clock).kind === "connected";
+    const now = useNow((at) => eagerExpiry(snapshot, watching, at));
+    const eager = useMemo(() => eagerThreads(snapshot, watching, now), [snapshot, watching, now]);
     const stalled = useMemo(() => stalledThreads(snapshot.threads, now), [snapshot.threads, now]);
     const chip = agentChipFor(presence.state, stalled, presence.clock);
     useTabStatus(snapshot, chip.kind);
@@ -387,6 +392,7 @@ export function App({
         snapshot,
         view,
         now,
+        eager,
         activeId,
         composer,
         composerRange,
@@ -493,6 +499,7 @@ export function App({
                 store={store}
                 snapshot={snapshot}
                 now={now}
+                eager={eager}
                 open={notes !== null}
                 focus={notes?.focus ?? null}
                 onOpen={() => setNotes({ focus: null })}
@@ -553,6 +560,7 @@ interface RailInput {
     snapshot: DocSnapshot;
     view: DocView;
     now: number;
+    eager: ReadonlySet<ThreadId>;
     activeId: ThreadId | null;
     composer: ComposerState | null;
     composerRange: Range | null;
@@ -591,6 +599,7 @@ function railItems(input: RailInput): RailItem[] {
                     active={thread.id === input.activeId}
                     now={now}
                     hold={snapshot.settings.hold}
+                    eager={input.eager.has(thread.id)}
                     onActivate={() => input.activate(thread.id)}
                     onDeactivate={input.deactivate}
                     apply={input.apply}

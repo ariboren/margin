@@ -12,6 +12,8 @@ interface DocNotesProps {
     store: DocStore;
     snapshot: DocSnapshot;
     now: number;
+    /** Threads just handed to a watching agent, which read as being answered. */
+    eager: ReadonlySet<ThreadId>;
     open: boolean;
     /** The note the panel opens on, selected and scrolled to. */
     focus: ThreadId | null;
@@ -58,7 +60,7 @@ export function DocNotes(props: DocNotesProps): JSX.Element {
         }
     }, [open, latest, seen, snapshot.path]);
     const unseen = !open && latest > seen;
-    const busy = docNotesBusy(notes, props.now);
+    const busy = docNotesBusy(notes, props.now, props.eager);
 
     const root = useRef<HTMLDivElement>(null);
     const close = useRef(onClose);
@@ -163,6 +165,7 @@ function Panel(props: DocNotesProps & { notes: ReturnType<typeof docNotes> }): J
                             collapsible={false}
                             now={props.now}
                             hold={snapshot.settings.hold}
+                            eager={props.eager.has(note.id)}
                             onActivate={() => setActiveId(note.id)}
                             apply={props.apply}
                             followLink={props.followLink}

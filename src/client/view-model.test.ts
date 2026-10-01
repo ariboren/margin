@@ -3,6 +3,7 @@ import { createAnchor } from "../core/anchor.ts";
 import { hashText, parseDoc } from "../core/blocks.ts";
 import type {
     DocSnapshot,
+    EditEvent,
     Event,
     EventInput,
     Thread,
@@ -15,6 +16,8 @@ import {
     buildView,
     docNotes,
     docNotesBusy,
+    eagerExpiry,
+    eagerThreads,
     firstUnresolved,
     headingSlugs,
     latestAgentSeq,
@@ -423,5 +426,91 @@ describe("firstUnresolved", () => {
         expect(firstUnresolved(buildView(snapshot), snapshot.threads)).toBe("c2");
         const settled = snapshotWith(["resolved"]);
         expect(firstUnresolved(buildView(settled), settled.threads)).toBeUndefined();
+    });
+});
+
+describe("the eager responding label", () => {
+    const sent = Date.parse("2026-09-30T12:00:00Z");
+    const handed = (states: ThreadState[]) => snapshotWith(states);
+
+    test("a thread just handed to a watching agent reads as being answered for three seconds", () => {
+        const snapshot = handed(["open"]);
+        const [thread] = snapshot.threads;
+        expect([...eagerThreads(snapshot, true, sent + 2_999)]).toEqual(["c1"]);
+        expect(threadStatus(thread!, sent + 2_999, true)).toBe("working");
+        expect([...eagerThreads(snapshot, true, sent + 3_000)]).toEqual([]);
+        expect(threadStatus(thread!, sent + 3_000, false)).toBe("open");
+    });
+
+    test("past three seconds a thread the cursor named falls back to notified", () => {
+        const snapshot = handed(["open"]);
+        const [thread] = snapshot.threads;
+        thread!.notifiedAt = "2026-09-30T12:00:01Z";
+        expect(threadStatus(thread!, sent + 1_500, true)).toBe("working");
+        expect(threadStatus(thread!, sent + 3_000, false)).toBe("notified");
+    });
+
+    test("with no agent watching nothing is eager", () => {
+        const snapshot = handed(["open"]);
+        expect(eagerThreads(snapshot, false, sent + 100).size).toBe(0);
+        expect(eagerExpiry(snapshot, false, sent + 100)).toBeNull();
+    });
+
+    test("only open threads are eager: a held draft, a claimed or an answered thread never is", () => {
+        const snapshot = handed(["draft", "working", "replied", "resolved", "open"]);
+        expect([...eagerThreads(snapshot, true, sent + 100)]).toEqual(["c5"]);
+        for (const thread of snapshot.threads.slice(0, 4)) {
+            expect(threadStatus(thread, sent + 100, true)).toBe(thread.state);
+        }
+    });
+
+    test("a page loaded after the three seconds never shows it", () => {
+        const snapshot = handed(["open"]);
+        expect(eagerThreads(snapshot, true, sent + 60_000).size).toBe(0);
+        expect(eagerExpiry(snapshot, true, sent + 60_000)).toBeNull();
+    });
+
+    test("an edit on the thread moves its last activity but hands nothing over", () => {
+        const snapshot = handed(["open"]);
+        const [thread] = snapshot.threads;
+        const edit = {
+            type: "edit",
+            seq: 7,
+            at: thread!.lastActivity,
+            by: "user",
+            cause: "revert",
+            id: "c1",
+            start: 0,
+            before: "a",
+            after: "b",
+            line: 1,
+            headingPath: [],
+        } satisfies EditEvent;
+        expect(eagerThreads({ ...snapshot, edits: [edit] }, true, sent + 100).size).toBe(0);
+        const elsewhere = { ...edit, id: "c9" as const };
+        expect(eagerThreads({ ...snapshot, edits: [elsewhere] }, true, sent + 100).size).toBe(1);
+    });
+
+    test("the clock wakes when the first eager thread expires", () => {
+        const snapshot = handed(["open", "open"]);
+        snapshot.threads[1]!.lastActivity = "2026-09-30T12:00:02Z";
+        expect(eagerExpiry(snapshot, true, sent + 2_500)).toBe(sent + 3_000);
+        expect(eagerExpiry(snapshot, true, sent + 3_000)).toBe(sent + 5_000);
+        expect(eagerExpiry(snapshot, true, sent + 5_000)).toBeNull();
+    });
+
+    test("an eager doc note keeps the notes button busy", () => {
+        const snapshot = handed(["open"]);
+        const [note] = snapshot.threads;
+        note!.anchor = undefined;
+        expect(docNotesBusy([note!], sent + 100)).toBe(false);
+        expect(docNotesBusy([note!], sent + 100, new Set(["c1"]))).toBe(true);
+    });
+
+    test("a detached or stalled thread keeps its own status", () => {
+        const snapshot = handed(["open"]);
+        const [thread] = snapshot.threads;
+        thread!.detached = true;
+        expect(threadStatus(thread!, sent + 100, true)).toBe("detached");
     });
 });
