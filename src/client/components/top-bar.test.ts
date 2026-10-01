@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { detachedLabel } from "./detached-action.tsx";
-import { radioStep, shortLabelsBelow } from "./top-bar.tsx";
+import { barClass, radioStep, shortLabelsBelow } from "./top-bar.tsx";
 
 describe("radioStep", () => {
     test("Right and Down step on, wrapping from the last option to the first", () => {
@@ -34,6 +34,15 @@ describe("the bar's wide buttons", () => {
         expect(shortLabelsBelow({ detached: false, drafts: true })).toBe("(max-width: 620px)");
         expect(shortLabelsBelow({ detached: true, drafts: false })).toBe("(max-width: 860px)");
         expect(shortLabelsBelow({ detached: true, drafts: true })).toBe("(max-width: 960px)");
+    });
+
+    test("mark the bar crowded with either showing and packed with both", () => {
+        expect(barClass({ detached: false, drafts: false })).toBe("topbar");
+        expect(barClass({ detached: true, drafts: false })).toBe("topbar topbar-crowded");
+        expect(barClass({ detached: false, drafts: true })).toBe("topbar topbar-crowded");
+        expect(barClass({ detached: true, drafts: true })).toBe(
+            "topbar topbar-crowded topbar-packed",
+        );
     });
 
     test("the detached action's full label stays its name whatever the bar shows", () => {

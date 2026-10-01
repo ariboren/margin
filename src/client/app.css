@@ -427,6 +427,10 @@
         gap: 2px;
     }
 
+    .theme-toggle {
+        display: inline-flex;
+    }
+
     @keyframes pulse {
         0%,
         100% {
@@ -2685,6 +2689,115 @@
 
         .doc h1 {
             font-size: 1.8em;
+        }
+    }
+
+    /* The threads button's compact form, an icon and the count, is for the tightest bars. */
+    .threads-mark,
+    .threads-count {
+        display: none;
+    }
+
+    .threads-mark {
+        width: 14px;
+        height: 14px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.5;
+        stroke-linejoin: round;
+    }
+
+    /* What a narrow bar gives up so the review control always fits beside the detached action
+       and "Send all". Undo and redo stay on their keys; the rest comes back with the room. */
+    @media (max-width: 760px) {
+        .topbar-packed .undo-buttons,
+        .topbar-packed .topbar-divider {
+            display: none;
+        }
+    }
+
+    @media (max-width: 520px) {
+        .topbar-crowded .undo-buttons {
+            display: none;
+        }
+    }
+
+    @media (max-width: 440px) {
+        .topbar {
+            padding-inline: 8px;
+        }
+
+        .topbar-packed .theme-toggle {
+            display: none;
+        }
+
+        .topbar-packed .topbar-start {
+            gap: 2px;
+        }
+
+        .topbar-packed .review-toggle {
+            padding: 0;
+        }
+    }
+
+    /* One wide button needs the room up to 440 px, both up to 520 px. */
+    @media (max-width: 440px) {
+        .topbar-crowded .doc-name,
+        .topbar-crowded .topbar-divider {
+            display: none;
+        }
+
+        .topbar-crowded .topbar-end,
+        .topbar-crowded .hold {
+            gap: 4px;
+        }
+
+        .topbar-crowded .topbar-end .button {
+            padding-inline: 8px;
+        }
+
+        .topbar-crowded .threads-mark,
+        .topbar-crowded .threads-count {
+            display: inline-block;
+        }
+
+        .topbar-crowded .threads-words {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+        }
+    }
+
+    @media (max-width: 520px) {
+        .topbar-packed .doc-name,
+        .topbar-packed .topbar-divider {
+            display: none;
+        }
+
+        .topbar-packed .topbar-end,
+        .topbar-packed .hold {
+            gap: 4px;
+        }
+
+        .topbar-packed .topbar-end .button {
+            padding-inline: 8px;
+        }
+
+        .topbar-packed .threads-mark,
+        .topbar-packed .threads-count {
+            display: inline-block;
+        }
+
+        .topbar-packed .threads-words {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
         }
     }
 
