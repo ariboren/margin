@@ -50,6 +50,10 @@ Tell the agent the doc is open in margin. Select a sentence, press `c`, type a q
 
 **Agent edits.** By default the agent suggests and you decide, unless your comment asks it to make the change. Turn on "Auto-apply edits" in settings and every agent edit on the doc lands in the file without waiting for you. An applied edit is labelled "Changed by agent" and has a Revert button.
 
+**Approving.** The "Review" control in the top bar records your verdict and carries an optional note to the agent. Approve needs every thread settled. With threads open, the control counts them and offers three ways to settle them. "Review one by one" jumps to the first, and `j` and `k` step through the rest. "Approve as-is" asks you to confirm, then closes them without action and leaves pending suggestions unapplied. "Let the agent resolve" applies the agent's pending suggestions to the file straight away, sends held drafts and hands every other open thread to the agent. The control then reads "Finishing, N left", and "Ready to approve" once they are settled.
+
+**Decline and reopen.** Decline works with threads open. Once a verdict stands, the control shows "Approved" or "Declined", with "Reopen" to take it back. A new comment, reply or suggestion from you reopens the doc. Edits never clear an approval; after one the control reads "Approved, changed since".
+
 **Changes from elsewhere.** Edits from your editor, from git or from the agent show up in the tab, and comments re-anchor to the new text. If the block you're editing changes underneath you, a bar at the foot of the page offers "Keep mine" or "Take theirs".
 
 **View.** The outline on the left counts open threads per section. The top bar hides the comment margin and switches between light and dark. Settings sets the text size and the page margins, which apply at any window width, and "Show resolved threads and edits" keeps finished threads and your edit cards in the margin.
@@ -71,7 +75,7 @@ Tell the agent the doc is open in margin. Select a sentence, press `c`, type a q
 
 ## Connecting an agent
 
-The agent works through the `margin` CLI and nothing else. It never reads the sidecar and never rewrites the whole file. `margin agent-help` prints the complete instructions in 1,494 bytes; the Claude Code skill and the AGENTS.md snippet are generated from that text. They tell the agent to answer in the doc, as replies and suggestions, and to post in chat only when you've asked for updates.
+The agent works through the `margin` CLI and nothing else. It never reads the sidecar and never rewrites the whole file. `margin agent-help` prints the complete instructions in 1,697 bytes; the Claude Code skill and the AGENTS.md snippet are generated from that text. They tell the agent to answer in the doc, as replies and suggestions, and to post in chat only when you've asked for updates.
 
 **Claude Code.** `margin setup` asks where to install the skill (this project, all your projects, or not at all) and asks before overwriting a skill that differs from this version's. Run it again after upgrading margin. `--user` and `--force` answer those questions up front, and when it isn't run from a terminal (by an agent or a script) it never asks: it installs in the current project and refuses to overwrite a changed skill without `--force`.
 
@@ -116,6 +120,18 @@ ok c1 replied
 
 The suggestion appears in your tab as an inline diff. Accept it and the file changes. Reject it with a note and the note reaches the agent in its next batch. The other thread commands are `margin reply <id> "text" [--resolve]`, `margin resolve <id>` and `margin show <id>`, which prints the whole block and thread.
 
+**The doc's status.** `margin watch` also prints the doc's status when it changes: `approved`, `declined`, `reopened`, or `finish c3 c5` when you hand threads to the agent. `margin pending` leads with the standing status, your note after a colon, and reads `approved changed` once the file differs from what you approved, `finish` while handed-over threads are open, and `reopened` once. `margin pending <doc> --wait` returns on each of these, so an agent can block until your verdict. An approved doc tells the agent to do what the doc says, a declined one to stop until you reopen it, and a finish request to settle each listed thread without asking: apply its suggestion and resolve, or reply and resolve.
+
+```console
+$ margin watch review.md
+finish c3 c5
+approved
+$ margin pending review.md
+approved: Ship it.
+```
+
+**Finding the doc.** Thread commands take the doc path or just the id. With an id alone, margin looks through the docs you have opened recently, under the working directory first and then elsewhere, and a reply, suggestion or resolve goes to the doc where that thread is still unresolved. When two docs could take it, the command refuses and names them: `err c1 not-unique; pass the doc: a.md b.md`. `margin --version` prints the installed version.
+
 ## Files and the daemon
 
 Comments are stored in a `.margin/` directory next to the doc: `.margin/<doc>.jsonl`, an append-only event log, plus a lock file. Add it to your `.gitignore`:
@@ -139,11 +155,13 @@ Output to the agent is kept small. Bytes of CLI stdout, measured by `bun run bud
 
 | Output                                          | Bytes                    |
 | ----------------------------------------------- | ------------------------ |
-| `margin watch`, per batch                       | 20                       |
+| `margin watch`, per batch (widest line)         | 46                       |
 | `margin pending`, per thread (median)           | 310                      |
 | `reply` / `suggest` / `resolve` acknowledgement | 16                       |
-| `margin agent-help`                             | 1,479                    |
-| 10 threads, full loop, all CLI output           | 4,755 (6.7% of the file) |
+| `margin agent-help`                             | 1,697                    |
+| 10 threads, full loop, all CLI output           | 4,773 (6.7% of the file) |
+
+A finish pass, where the agent settles the same ten threads after you hand them over, costs 4,310 bytes on top.
 
 One real Claude Code session (Opus 5.5) resolved 12 threads on a 165,788-byte doc at about 2 requests and $0.05 per thread, at API prices.
 

@@ -2,18 +2,22 @@
 
 Bytes of real CLI stdout, from `bun run budget` (public sample) and `bun run budget --sample private`
 (the private sample, which is not in the repo). Ceilings are in `budget.json`; the method is in
-`scripts/budget.ts`. Measured 2026-09-30 after the compact-only watch line; `agent-help` after the no-chat rule, the
-`--as` naming line (ceiling raised 1,450 → 1,500 B, owner, 2026-09-30) and dropping the `downgraded` ack (#11); 1,479 B after naming the `resolved`, `deleted` and `locked` errors.
+`scripts/budget.ts`. Measured 2026-10-01 after the doc verdict and finish request. `agent-help` grew
+with the no-chat rule, the `--as` naming line (ceiling raised 1,450 → 1,500 B, owner, 2026-09-30),
+the named `resolved`, `deleted` and `locked` errors, and then the doc status lines (ceiling raised
+1,500 → 1,700 B, owner, 2026-10-01); to fit, the `--as` line left the help text for the skill
+preamble and the README. `watch` is the widest line printed: `declined | new c1 … c10`, a decline
+beside ten new threads; an ordinary batch is 20 B.
 
 | Operation                                    | Ceiling (B) | Public (B) | Private (B) |
 | -------------------------------------------- | ----------: | ---------: | ----------: |
-| `watch`, per batch                           |         120 |         20 |          20 |
+| `watch`, per batch, widest line              |         120 |         46 |          46 |
 | `pending`, per thread, median                |         700 |        310 |         345 |
 | `pending`, per thread, max                   |       1,300 |        664 |         674 |
 | `pending`, per user edit (base)              |         200 |        120 |         147 |
 | `reply` / `resolve` / `suggest` ack          |          24 |         16 |          16 |
-| `agent-help`                                 |       1,500 |      1,479 |       1,479 |
-| 10 seeded threads, full loop, all CLI output |       8,000 |      4,755 |       4,978 |
+| `agent-help`                                 |       1,700 |      1,697 |       1,697 |
+| 10 seeded threads, full loop, all CLI output |       8,000 |      4,773 |       4,996 |
 
 `pending` as plain text against `--json` for the same seeded state:
 
@@ -22,9 +26,16 @@ Bytes of real CLI stdout, from `bun run budget` (public sample) and `bun run bud
 | Public  |    4,570 |    5,753 |
 | Private |    4,793 |    5,987 |
 
-The full loop is 4,755 B on a 71,296 B file (6.7%) and 4,978 B on a 165,788 B file (3.0%). Every
-batch now goes through `pending` (three calls, the first carrying the user edits); with the capped
-inline line it was 3,800 B and 4,078 B.
+The full loop is 4,773 B on a 71,296 B file (6.7%) and 4,996 B on a 165,788 B file (3.0%). Every
+batch goes through `pending` (three calls, the first carrying the user edits); with the capped
+inline line it was 3,800 B and 4,078 B. The loop now ends with the user approving as is: one
+`approved` watch line and the `approved` header a fresh `pending` read prints, 18 B over the
+4,755 B and 4,978 B measured before.
+
+A finish pass, measured as a second loop and kept out of the first one's total, hands the same ten
+threads to the agent and costs 4,310 B (public) and 4,419 B (private): the `finish c1 … c10` watch
+line, one `pending` read with the `finish` header and every thread in full, and ten acks. It has no
+ceiling of its own.
 
 Decision (owner, 2026-09-30): the watch line is compact only, because the real session below tied
 inline and compact at $0.048 per resolved thread; `watch` claims nothing and `pending` is the only
