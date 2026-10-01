@@ -716,6 +716,9 @@
         margin: 0;
         padding: 0;
         display: grid;
+        /* The panel stretches the list to full height; without this a short outline's rows
+           stretch to fill it. */
+        align-content: start;
         gap: 1px;
     }
 
