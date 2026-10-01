@@ -1382,7 +1382,8 @@
     .doc [data-unit] {
         --unit-hover-fill: transparent;
         --unit-hover-radius: 0;
-        --unit-hover-shadow: -8px 0 0 0 var(--paper), -10px 0 0 0 var(--rule-strong);
+        --unit-hover-mask: var(--paper);
+        --unit-hover-shadow: -8px 0 0 0 var(--unit-hover-mask), -10px 0 0 0 var(--rule-strong);
         transition: box-shadow 120ms;
     }
 
@@ -1400,12 +1401,18 @@
         --unit-hover-shadow: none;
     }
 
+    /* A shadow follows its box's corners, and these units are the rounded block itself. A spread
+       of minus the radius squares the shadow but shortens it by that much at each end, so each
+       band is drawn twice, shifted up and down, to span the full height like a paragraph's. */
     .doc [data-kind="code"],
     .doc [data-kind="html"],
     .doc [data-kind="yaml"],
     .doc [data-kind="toml"] {
         --unit-hover-fill: var(--paper-sunk);
         --unit-hover-radius: 8px;
+        --unit-hover-shadow:
+            -16px -8px 0 -8px var(--unit-hover-mask), -16px 8px 0 -8px var(--unit-hover-mask),
+            -18px -8px 0 -8px var(--rule-strong), -18px 8px 0 -8px var(--rule-strong);
     }
 
     .doc [data-kind="tableCell"] {
@@ -1414,14 +1421,12 @@
     }
 
     .doc blockquote [data-unit] {
-        --unit-hover-shadow: -8px 0 0 0 var(--paper-sunk), -10px 0 0 0 var(--rule-strong);
+        --unit-hover-mask: var(--paper-sunk);
     }
 
     /* A list item's gutter holds its marker, so the mask would hide it: the innermost hovered
-       item draws the rule left of its marker, and the units inside it draw nothing. Inside a
-       quote the item is named again, to tie the quote rule's specificity and follow it. */
+       item draws the rule left of its marker, and the units inside it draw nothing. */
     .doc [data-kind="listItem"],
-    .doc blockquote [data-kind="listItem"],
     .doc [data-kind="listItem"] [data-unit] {
         --unit-hover-shadow: none;
     }
