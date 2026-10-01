@@ -6,7 +6,7 @@
 
 Review AI-written markdown like a Google Doc.
 
-margin opens a markdown file in your browser as a document with a comment margin. Select text to comment on it or to suggest a change, and click a paragraph to edit it in place. The agent that wrote the file answers through a small CLI: it replies in the thread and proposes edits that appear as inline diffs for you to accept or reject. The file stays plain markdown in your repo, with no ids or markers added, and the comments live in a sidecar beside it.
+margin opens a markdown file in your browser as a document with a comment margin. Select text to comment on it or to suggest a change, and double click a paragraph to edit it in place. The agent that wrote the file answers through a small CLI: it replies in the thread and proposes edits that appear as inline diffs for you to accept or reject. The file stays plain markdown in your repo, with no ids or markers added, and the comments live in a sidecar beside it.
 
 It is made for the long documents agents produce, such as plans and reviews, where a terminal diff or a chat window is the wrong place to read them. Any agent that can run shell commands can take part. Claude Code is tested end to end.
 
@@ -21,6 +21,8 @@ curl -fsSL https://bun.sh/install | bash   # if you don't have Bun
 bun add -g margin-md
 ```
 
+With Homebrew, `brew install ariboren/tap/margin` installs margin and Bun together.
+
 To try it once without installing, run `bunx margin-md path/to/doc.md`. Agents call `margin` directly, so install it globally before connecting one.
 
 ## Quick start
@@ -34,19 +36,23 @@ Tell the agent the doc is open in margin. Select a sentence, press `c`, type a q
 
 ## Reviewing
 
-**Comments and suggestions.** Select text and press `c` to comment or `s` to suggest a replacement. The same two buttons appear above the selection. Threads sit in the margin beside the text they quote and show their state: draft, open, agent working, replied or resolved. A thread the agent picked up but hasn't answered in 10 minutes is marked stalled. If the quoted text is deleted the thread is marked detached, and it reattaches when the text comes back.
+**Comments and suggestions.** Select text and press `c` to comment or `s` to suggest a replacement. The same two buttons appear above the selection. Threads sit in the margin beside the text they quote, folded to a header with their state (draft, open, agent notified, agent responding, replied or resolved) until you click one open. A thread the agent picked up but hasn't answered in 10 minutes is marked stalled. If the quoted text is deleted the thread is marked detached, and it reattaches when the text comes back. After a rewrite, "Resolve N detached threads" in the top bar clears them in one step.
+
+**Doc notes.** For a comment on the doc as a whole, open "Doc notes" at the bottom right or press `n`. Notes read like a chat with the agent and stay out of the margin. The agent gets them alongside your other threads and answers with a reply or an edit.
 
 **Agent suggestions.** A proposed edit shows as an inline diff in the text. Accept writes it to the file and resolves the thread. Reject with a note sends the note back to the agent; reject without one resolves the thread.
 
-**Editing.** Click a paragraph to edit its markdown in place. Click away or press `⌘↵` to save, or `Esc` to cancel. Lists and tables are edited one item or cell at a time, and "Edit as source" opens the whole list or table. A save rewrites only that block's bytes, so `git diff` shows exactly what you changed. The agent sees your edits the next time it reads the doc. "Ask agent to follow through" turns an edit into a thread, for when the rest of the doc should change to match.
+**Editing.** Double click a paragraph to edit its markdown in place, or set "Edit blocks with" in settings to single click. An Editing chip at the foot of the page shows the keys: click away or press `⌘↵` to save, or `Esc` to cancel. Lists and tables are edited one item or cell at a time, and "Edit as source" opens the whole list or table. A save rewrites only that block's bytes, so `git diff` shows exactly what you changed. The agent gets your edits with your next comment or reply. With "Show resolved threads and edits" on, each save also shows in the margin as an "Edited by you" card, and "Add a note" on it turns the edit into a thread, for when the rest of the doc should change to match.
 
-**Hold.** Switch on Hold in the top bar and new comments stay as drafts until you press "Send all".
+**Undo.** `⌘Z` and `⇧⌘Z`, or the arrows in the top bar, undo and redo your own edits and thread actions. A reply or resolve the agent has already read stays put.
 
-**Agent edits.** By default the agent suggests and you decide. "Auto-apply agent edits" in settings applies its edits for the rest of the session, and each thread has its own Auto-apply switch. "Suggestions only" stops the agent from writing to the file at all. An applied edit is labelled "Changed by agent" and has a Revert button.
+**Live.** Comments reach the agent as you post them. Switch off Live in the top bar and new comments stay as drafts until you press "Send all".
 
-**Changes from elsewhere.** Edits from your editor, from git or from the agent show up in the tab, and comments re-anchor to the new text. If the block you're editing changes underneath you, a bar offers "Keep mine" or "Take theirs".
+**Agent edits.** By default the agent suggests and you decide, unless your comment asks it to make the change. Turn on "Auto-apply edits" in settings and every agent edit on the doc lands in the file without waiting for you. An applied edit is labelled "Changed by agent" and has a Revert button.
 
-**View.** The outline on the left counts open threads per section. The top bar hides the comment margin and switches between light and dark. Settings has text size and "Show resolved threads".
+**Changes from elsewhere.** Edits from your editor, from git or from the agent show up in the tab, and comments re-anchor to the new text. If the block you're editing changes underneath you, a bar at the foot of the page offers "Keep mine" or "Take theirs".
+
+**View.** The outline on the left counts open threads per section. The top bar hides the comment margin and switches between light and dark. Settings sets the text size and the page margins, which apply at any window width, and "Show resolved threads and edits" keeps finished threads and your edit cards in the margin.
 
 ![margin in the dark theme](docs/images/margin-dark.webp)
 
@@ -58,12 +64,14 @@ Tell the agent the doc is open in margin. Select a sentence, press `c`, type a q
 | `s`                 | Suggest a replacement for the selection        |
 | `j` / `k`           | Next / previous thread                         |
 | `a` / `r`           | Accept / reject the active thread's suggestion |
+| `n`                 | Open or close doc notes                        |
 | `⌘↵` (`Ctrl+Enter`) | Send a comment or reply, save an edit          |
+| `⌘Z` / `⇧⌘Z`        | Undo / redo your own edits and thread actions  |
 | `Esc`               | Cancel, close a panel, or deselect the thread  |
 
 ## Connecting an agent
 
-The agent works through the `margin` CLI and nothing else. It never reads the sidecar and never rewrites the whole file. `margin agent-help` prints the complete instructions in 1,345 bytes; the Claude Code skill and the AGENTS.md snippet are generated from that text.
+The agent works through the `margin` CLI and nothing else. It never reads the sidecar and never rewrites the whole file. `margin agent-help` prints the complete instructions in 1,479 bytes; the Claude Code skill and the AGENTS.md snippet are generated from that text. They tell the agent to answer in the doc, as replies and suggestions, and to post in chat only when you've asked for updates.
 
 **Claude Code.** `margin setup` installs the skill in the current project, `margin setup --user` installs it for all your projects. Run it again after upgrading margin. It won't overwrite a skill you've edited unless you pass `--force`.
 
@@ -73,6 +81,15 @@ margin setup --user    # ~/.claude/skills/margin/
 ```
 
 **Other agents.** `margin setup` also prints a snippet to paste into your `AGENTS.md`, which margin never edits itself. The same text is in [AGENTS.snippet.md](AGENTS.snippet.md). Any agent that can run shell commands can follow it, but only Claude Code has been tested end to end.
+
+**Who is answering.** The page shows the connected agent beside the filename, with its name on every reply. The name comes from `--as <name>` on any margin command, else the `MARGIN_AGENT` environment variable, else the client margin detects (Claude Code, Codex or Cursor, from the markers they set in their shells). Several agents on one doc each appear under their own name.
+
+```sh
+margin watch review.md --as foreman
+MARGIN_AGENT=reviewer margin pending review.md
+```
+
+The chip is green while an agent is watching, amber when none is or a reply has stalled, and red if the page loses the daemon. With no agent connected, click it to copy a message that tells your agent to start watching the doc. The browser tab carries the same state as a coloured dot, which turns blue when a reply lands while you're in another tab, and the title counts them, as in "(2) review.md · margin".
 
 **The loop.** Claude Code runs `margin watch` under its Monitor tool. It prints one line per batch of new comments. Agents without Monitor run `margin pending <doc> --wait` instead, which blocks until the next batch arrives.
 
@@ -107,7 +124,7 @@ Comments are stored in a `.margin/` directory next to the doc: `.margin/<doc>.js
 .margin/
 ```
 
-One background daemon serves every doc you open, one doc per tab. `margin <doc>` starts it or reuses the one already running, opens the tab, prints its URL and exits. The daemon exits by itself after 30 minutes with no tabs open. Inside Orca the tab opens in Orca's built-in browser; anywhere else it opens in your default browser.
+One background daemon serves every doc you open, one doc per tab. `margin <doc>` starts it or reuses the one already running, opens the tab at a readable address such as `http://127.0.0.1:<port>/d/212a0553/review.md`, prints its URL and exits. The daemon exits by itself after 30 minutes with no tabs open. Inside Orca the tab opens in Orca's built-in browser; anywhere else it opens in your default browser.
 
 ```sh
 margin status    # daemon pid and port, then each open doc and its tab count
@@ -125,7 +142,7 @@ Output to the agent is kept small. Bytes of CLI stdout, measured by `bun run bud
 | `margin watch`, per batch                       | 20                       |
 | `margin pending`, per thread (median)           | 310                      |
 | `reply` / `suggest` / `resolve` acknowledgement | 16                       |
-| `margin agent-help`                             | 1,345                    |
+| `margin agent-help`                             | 1,479                    |
 | 10 threads, full loop, all CLI output           | 4,755 (6.7% of the file) |
 
 One real Claude Code session (Opus 5.5) resolved 12 threads on a 165,788-byte doc at about 2 requests and $0.05 per thread, at API prices.
@@ -137,7 +154,7 @@ CI runs on every push to `main` and every pull request, and any failure fails th
 - Byte-exact saves: round-trip tests on BOM, CRLF, a missing trailing newline, code fences and frontmatter, plus [fast-check](https://fast-check.dev) property tests that generate random edits and shrink any failure to a minimal case.
 - Concurrency: 20 processes append to one comment log, take one lock and edit one doc at the same time without losing an event or interleaving a write.
 - The agent loop end to end: a real daemon, a scripted user on its HTTP protocol and the agent answering through the CLI, checked down to the bytes in the file.
-- A line-coverage floor of 86% on `src/`.
+- Line-coverage floors on `src/` per layer: 99% core, 94% CLI and 89% server. The browser client is reported without one; browser checks and end-to-end tests cover it.
 - A byte ceiling on every agent-facing command, from [`budget.json`](budget.json).
 - The npm tarball packed, installed in a clean directory and run.
 - Dependencies and actions updated weekly by Dependabot, actions pinned to commit SHAs, and [zizmor](https://docs.zizmor.sh) auditing the workflow on every run.
@@ -151,3 +168,7 @@ The daemon listens on 127.0.0.1 only and requires a random per-daemon token. Doc
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
+
+## Trademarks
+
+Claude is a trademark of Anthropic, PBC. OpenAI and Codex are trademarks of OpenAI. Cursor is a trademark of Anysphere, Inc. margin is not affiliated with or endorsed by any of them.

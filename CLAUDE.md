@@ -30,6 +30,8 @@ foreman-only.
 - `bun run typecheck`, `bun test`, `bun run build`, `bun run mockup`, `bun run budget`
 - `bun run link-sample <path>` (or `MARGIN_SAMPLE=<path>`): copies the private sample to
   `fixtures/private/sample.md`.
+- `bun run dev`: daemon from this checkout on the default state dir; rebuilds the client and
+  reloads tabs on `src/client`/`src/core` changes, restarts the daemon on `src/server`/`src/core`.
 - `bunx prettier --write <files>`: scoped formatting only.
 
 ## Rules

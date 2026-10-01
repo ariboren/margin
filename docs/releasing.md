@@ -47,6 +47,8 @@ Do these in order. Trusted publishing needs the package to exist on npm, and pro
 
 A version with a prerelease part, such as `0.2.0-beta.1`, publishes under the `next` dist-tag instead of `latest`.
 
+The [Homebrew tap](https://github.com/ariboren/homebrew-tap) picks up each new `latest` release by itself: a daily workflow there updates the formula once the npm version and its tag both exist.
+
 ## Sources
 
 - [npm trusted publishers](https://docs.npmjs.com/trusted-publishers): npm 11.5.1 or later, `id-token: write`, provenance is automatic.
