@@ -1,6 +1,6 @@
 // `margin pending`: threads waiting on the agent plus user edits since its last read. It claims
 // what it returns and moves the pending cursor, so edits ride along exactly once.
-import { unitAt } from "../core/blocks.ts";
+import { hashText, unitAt } from "../core/blocks.ts";
 import { docTitle } from "../core/context.ts";
 import { netEdits, pendingEdit } from "../core/diff.ts";
 import {
@@ -9,6 +9,7 @@ import {
     type EditEvent,
     type EventInput,
     type PendingJson,
+    type PendingReview,
     type PendingThread,
     type Thread,
 } from "../core/model.ts";
@@ -18,7 +19,7 @@ import { withPresence } from "../server/presence.ts";
 import { needsAgent } from "../core/threads.ts";
 import { locate, viewOf, type DocView } from "./doc.ts";
 import { formatPending } from "./format.ts";
-import { WakeTail, type WaitOptions } from "./watch.ts";
+import { finishWaiting, WakeTail, type WaitOptions } from "./watch.ts";
 
 /**
  * Full thread when unclaimed, else only what came after the agent's last say: its last message
@@ -70,6 +71,29 @@ function inUnit(view: DocView, edit: EditEvent): { before: string; after: string
     return { before: head + edit.before + tail, after: head + edit.after + tail };
 }
 
+/**
+ * What a session starting fresh has to know about the doc, so a standing verdict and an
+ * outstanding finish request are said on every read; only the return to open is said once, to
+ * the read whose cursor it is past. A finish request implies the doc is open. `changed` compares
+ * the verdict's hash with `hashText` of the source as `viewOf` read it; a missing doc says nothing.
+ */
+function pendingReview(view: DocView): PendingReview | undefined {
+    const { verdict, cursors } = view.state;
+    if (verdict && verdict.state !== "open") {
+        const changed =
+            verdict.state === "approved" &&
+            view.doc !== null &&
+            hashText(view.doc.source) !== verdict.hash;
+        return {
+            verdict: verdict.state,
+            ...(changed ? { changed: true as const } : {}),
+            ...(verdict.note ? { note: verdict.note } : {}),
+        };
+    }
+    if (finishWaiting(view.state).length > 0) return { finish: true };
+    return verdict && verdict.seq > cursors.pending ? { reopened: true } : undefined;
+}
+
 export function buildPending(view: DocView): PendingJson {
     const { state } = view;
     const title = view.doc ? docTitle(view.doc) : undefined;
@@ -89,7 +113,8 @@ export function buildPending(view: DocView): PendingJson {
             }),
         )
         .filter((edit) => edit.hunks.length > 0);
-    return { threads, edits };
+    const review = pendingReview(view);
+    return { threads, edits, ...(review ? { review } : {}) };
 }
 
 export interface PendingOptions {

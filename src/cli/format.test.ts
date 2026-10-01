@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { byteLength } from "../core/diff.ts";
-import type { Ack, AckError } from "../core/model.ts";
+import type { Ack, AckError, PendingReview } from "../core/model.ts";
 import { applyEdit } from "../core/apply.ts";
 import { formatAck, formatPending, formatWatch } from "./format.ts";
 import { sandbox } from "./testing.ts";
@@ -97,6 +97,41 @@ test("a doc note in pending is its header and messages only", () => {
 
 test("empty pending says none", () => {
     expect(formatPending({ threads: [], edits: [] })).toBe("none");
+});
+
+describe("doc status", () => {
+    test("a watch group for the doc is its word alone, and finish lists its threads", () => {
+        expect(
+            formatWatch({
+                form: "compact",
+                groups: [
+                    { reason: "dropped", ids: [] },
+                    { reason: "new", ids: ["c7"], path: "A" },
+                ],
+            }),
+        ).toBe('dropped | new c7 "A"');
+        for (const reason of ["approved", "dropped", "reopened"] as const) {
+            expect(formatWatch({ form: "compact", groups: [{ reason, ids: [] }] })).toBe(reason);
+        }
+        expect(
+            formatWatch({ form: "compact", groups: [{ reason: "finish", ids: ["c3", "c5"] }] }),
+        ).toBe("finish c3 c5");
+    });
+
+    test("the pending header is one line, alone when nothing waits", () => {
+        const header = (review: PendingReview) => formatPending({ threads: [], edits: [], review });
+        expect(header({ verdict: "approved" })).toBe("approved");
+        expect(header({ verdict: "approved", note: "Ship it" })).toBe("approved: Ship it");
+        expect(header({ verdict: "approved", changed: true })).toBe("approved changed");
+        expect(header({ verdict: "approved", changed: true, note: "a\nb" })).toBe(
+            "approved changed: a\\nb",
+        );
+        expect(header({ verdict: "dropped" })).toBe("dropped");
+        expect(header({ verdict: "dropped", note: "Later" })).toBe("dropped: Later");
+        expect(header({ finish: true })).toBe("finish");
+        expect(header({ reopened: true })).toBe("reopened");
+        expect(header({})).toBe("none");
+    });
 });
 
 describe("a multi-line setext heading", () => {

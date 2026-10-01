@@ -2,7 +2,7 @@
 // the contract teaches (each compact watch line, then `pending` for the threads) and answers
 // each thread by a policy. It runs the real CLI in-process, so what it records is
 // the stdout an agent would read. `bun scripts/fake-agent.ts <doc>` runs it against a live doc.
-import type { ThreadId, WakeReason } from "../src/core/model.ts";
+import type { PendingReview, ThreadId, WakeReason } from "../src/core/model.ts";
 import { isThreadId } from "../src/cli/doc.ts";
 import type { CompactLine } from "../src/cli/format.ts";
 import { run } from "../src/cli/main.ts";
@@ -48,6 +48,8 @@ export interface PendingEditBlock {
 export interface PendingOutput {
     threads: PendingThreadBlock[];
     edits: PendingEditBlock[];
+    /** The header line, when the doc's status has something to say. */
+    review?: PendingReview;
 }
 
 export interface Batch {
@@ -65,7 +67,15 @@ function jsonString(text: string, from: number): [string, number] {
     return [JSON.parse(text.slice(from, end + 1)) as string, end + 1];
 }
 
-const REASONS: readonly string[] = ["new", "reply", "rejected"] satisfies WakeReason[];
+const REASONS: readonly string[] = [
+    "new",
+    "reply",
+    "rejected",
+    "approved",
+    "dropped",
+    "reopened",
+    "finish",
+] satisfies WakeReason[];
 
 function parseCompact(text: string): CompactLine {
     const groups: CompactLine["groups"] = [];
@@ -108,13 +118,32 @@ function unescapeLine(text: string): string {
     return text.replace(/\\n/g, "\n");
 }
 
+/** The header of `pending`: `approved changed: note`, `dropped`, `finish` or `reopened`. */
+function parseReview(line: string): PendingReview | undefined {
+    if (line === "finish") return { finish: true };
+    if (line === "reopened") return { reopened: true };
+    const verdict = /^(approved|dropped)( changed)?(?:: (.*))?$/.exec(line);
+    if (!verdict) return undefined;
+    return {
+        verdict: verdict[1] as "approved" | "dropped",
+        ...(verdict[2] ? { changed: true as const } : {}),
+        ...(verdict[3] === undefined ? {} : { note: unescapeLine(verdict[3]) }),
+    };
+}
+
 /** Parses plain-text `margin pending` output. */
 export function parsePending(stdout: string): PendingOutput {
     const out: PendingOutput = { threads: [], edits: [] };
     const text = stdout.replace(/\n$/, "");
     if (text === "none") return out;
     const blocks: string[][] = [];
-    for (const line of text.split("\n")) {
+    const lines = text.split("\n");
+    const review = parseReview(lines[0]!);
+    if (review) {
+        out.review = review;
+        lines.shift();
+    }
+    for (const line of lines) {
         if (line.startsWith("  ")) blocks.at(-1)?.push(line);
         else blocks.push([line]);
     }

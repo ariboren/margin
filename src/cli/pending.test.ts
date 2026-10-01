@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { readFileSync, rmSync } from "node:fs";
 import { applyEdit } from "../core/apply.ts";
+import { decodeSource, hashText } from "../core/blocks.ts";
 import { readLog } from "../core/log.ts";
-import type { Event, PendingJson } from "../core/model.ts";
+import type { Event, EventInput, PendingJson, ThreadId } from "../core/model.ts";
 import { pending, pendingWait } from "./pending.ts";
 import { sandbox, type Sandbox } from "./testing.ts";
 import { emitWatch } from "./watch.ts";
@@ -242,7 +244,145 @@ describe("doc notes", () => {
     });
 });
 
+describe("review header", () => {
+    /** The hash a verdict records: `hashText` of the decoded source, as `viewOf` reads it. */
+    function docHash(): string {
+        return hashText(decodeSource(readFileSync(box.doc)));
+    }
+
+    async function verdict(
+        state: "approved" | "dropped" | "open",
+        extra: { note?: string; closed?: ThreadId[] } = {},
+    ): Promise<void> {
+        await box.append({ type: "verdict", by: "user", state, hash: docHash(), ...extra });
+    }
+
+    test("an open doc has none, and none stays none", async () => {
+        expect(await readText()).toBe("none\n");
+        expect(await read()).toEqual({ threads: [], edits: [] });
+    });
+
+    test("an approved doc says so on every read, alone when nothing waits", async () => {
+        await verdict("approved");
+        expect(await readText()).toBe("approved\n");
+        expect(await readText()).toBe("approved\n");
+        expect((await read()).review).toEqual({ verdict: "approved" });
+    });
+
+    test("the note follows a colon, on one line", async () => {
+        await verdict("approved", { note: "Ship it" });
+        expect(await readText()).toBe("approved: Ship it\n");
+        expect((await read()).review).toEqual({ verdict: "approved", note: "Ship it" });
+        await verdict("dropped", { note: "Not now\nmaybe later" });
+        expect(await readText()).toBe("dropped: Not now\\nmaybe later\n");
+    });
+
+    test("changed is the verdict's hash against hashText of the source as read", async () => {
+        await verdict("approved", { note: "Go" });
+        expect((await read()).review).toEqual({ verdict: "approved", note: "Go" });
+        await userEdit("rarely runs", "never runs");
+        expect(await readText()).toStartWith("approved changed: Go\nedit L5 Findings\n");
+        expect((await read()).review).toEqual({ verdict: "approved", changed: true, note: "Go" });
+        await userEdit("never runs", "rarely runs");
+        expect((await read()).review).toEqual({ verdict: "approved", note: "Go" });
+    });
+
+    test("a BOM and CRLF doc approved at its own hash is not changed", async () => {
+        box.cleanup();
+        box = sandbox("\uFEFF# Title\r\n\r\nThe cold path rarely runs.");
+        await verdict("approved");
+        expect(await readText()).toBe("approved\n");
+    });
+
+    test("a dropped doc never says changed, and a missing doc says nothing of it", async () => {
+        await verdict("dropped");
+        await userEdit("rarely runs", "never runs");
+        expect((await read()).review).toEqual({ verdict: "dropped" });
+        await verdict("approved");
+        rmSync(box.doc);
+        expect((await read()).review).toEqual({ verdict: "approved" });
+    });
+
+    test("a drop leaves its threads under the header", async () => {
+        await box.comment("cold path", "Why?");
+        await verdict("dropped");
+        expect(await readText()).toStartWith("dropped\nc1 open L5 Findings\n");
+    });
+
+    test("reopened is said once, to the read whose cursor it is past", async () => {
+        await verdict("approved");
+        await read();
+        await verdict("open");
+        expect(await readText()).toBe("reopened\n");
+        expect(await readText()).toBe("none\n");
+
+        await verdict("approved");
+        await box.comment("cold path", "One more thing");
+        expect((await read()).review).toEqual({ reopened: true });
+        expect((await read()).review).toBeUndefined();
+    });
+
+    test("finish heads every read while a handed thread waits on the agent", async () => {
+        const answered = await box.comment("cold path", "First");
+        await read();
+        await box.append({ type: "reply", by: "agent", id: answered, text: "Answer" });
+        const held = await box.comment("Retry queue", "Held", { draft: true });
+        await box.append({ type: "finish", by: "user", ids: [answered, held] });
+
+        const first = await read();
+        expect(first.review).toEqual({ finish: true });
+        // The thread the agent had answered comes back with nothing new to read.
+        expect(first.threads.map((thread) => [thread.id, thread.messages])).toEqual([
+            ["c1", []],
+            ["c2", [{ by: "user", text: "Held" }]],
+        ]);
+        expect(await readText()).toStartWith("finish\nc1 working L5 Findings\n");
+
+        await box.append({ type: "resolve", by: "agent", id: answered });
+        expect((await read()).review).toEqual({ finish: true });
+        // Answered without resolving: it waits on the user, so the request is no longer said.
+        await box.append({ type: "reply", by: "agent", id: held, text: "Done" });
+        expect(await readText()).toBe("none\n");
+    });
+
+    test("a finish that reopened a dropped doc says finish, then nothing once settled", async () => {
+        const id = await box.comment("cold path", "Why?");
+        await verdict("dropped");
+        await box.append({ type: "finish", by: "user", ids: [id] });
+        expect((await read()).review).toEqual({ finish: true });
+        await box.append({ type: "resolve", by: "agent", id });
+        expect(await readText()).toBe("none\n");
+        await verdict("approved");
+        expect(await readText()).toBe("approved\n");
+    });
+});
+
 describe("pending --wait", () => {
+    test("a verdict and a finish each unblock it", async () => {
+        const id = await box.comment("cold path", "A");
+        await read();
+        const steps: [EventInput, string][] = [
+            [{ type: "finish", by: "user", ids: [id] }, "finish\nc1 open"],
+            [
+                { type: "verdict", by: "user", state: "approved", hash: "h", closed: [id] },
+                "approved",
+            ],
+            [{ type: "verdict", by: "user", state: "open", hash: "h" }, "reopened\n"],
+        ];
+        for (const [input, text] of steps) {
+            let out = "";
+            const waiting = pendingWait(box.doc, {
+                debounceMs: 0,
+                write: (chunk) => (out += chunk),
+            });
+            await Bun.sleep(300);
+            expect(out).toBe("");
+            await box.append(input);
+            expect(await waiting).toBe(true);
+            expect(out).toStartWith(text);
+        }
+    });
+
     test("returns at once for a backlog", async () => {
         await box.comment("cold path", "A");
         let out = "";

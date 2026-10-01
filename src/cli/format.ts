@@ -5,6 +5,7 @@ import {
     isDocNote,
     type Ack,
     type PendingJson,
+    type PendingReview,
     type PendingThread,
     type ShowOutput,
     type WatchLine,
@@ -71,8 +72,21 @@ export function formatThread(thread: PendingThread, withMessages = true): string
     return lines.join("\n");
 }
 
+/** `approved changed: note`, `dropped`, `finish` or `reopened`; nothing for an open doc. */
+function reviewLine(review: PendingReview | undefined): string[] {
+    if (review?.verdict) {
+        const changed = review.changed ? " changed" : "";
+        const note = review.note ? `: ${oneLine(review.note)}` : "";
+        return [`${review.verdict}${changed}${note}`];
+    }
+    if (review?.finish) return ["finish"];
+    return review?.reopened ? ["reopened"] : [];
+}
+
+/** The review line leads and stands alone when nothing waits; `none` is an open doc with nothing. */
 export function formatPending(pending: PendingJson): string {
     const blocks = [
+        ...reviewLine(pending.review),
         ...pending.threads.map((thread) => formatThread(thread)),
         ...pending.edits.map(formatEdit),
     ];

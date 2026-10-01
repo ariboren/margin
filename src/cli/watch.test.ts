@@ -4,7 +4,7 @@ import { readLog } from "../core/log.ts";
 import type { Event } from "../core/model.ts";
 import { foldLog } from "../core/threads.ts";
 import { sandbox, type Sandbox } from "./testing.ts";
-import { DEBOUNCE_MS, emitWatch, wakeReason, watch } from "./watch.ts";
+import { DEBOUNCE_MS, docWake, emitWatch, wakeReason, watch } from "./watch.ts";
 
 let box: Sandbox;
 
@@ -137,6 +137,134 @@ describe("emit", () => {
         const out = collect();
         await emitWatch(box.doc, out.write);
         expect(out.lines).toEqual(['new c1 "Findings"\n']);
+    });
+});
+
+async function emitted(): Promise<string> {
+    const out = collect();
+    await emitWatch(box.doc, out.write);
+    return out.lines.join("");
+}
+
+describe("doc status", () => {
+    const approve = { type: "verdict", by: "user", state: "approved", hash: "h" } as const;
+    const drop = { type: "verdict", by: "user", state: "dropped", hash: "h" } as const;
+    const reopen = { type: "verdict", by: "user", state: "open", hash: "h" } as const;
+
+    test("a verdict prints its word alone, once", async () => {
+        await box.append({ ...approve, note: "Ship it" });
+        expect(await emitted()).toBe("approved\n");
+        expect((await events()).at(-1)).toMatchObject({ type: "cursor", upTo: 1, ids: [] });
+        expect(await emitted()).toBe("");
+        await box.append(drop);
+        expect(await emitted()).toBe("dropped\n");
+        await box.append(reopen);
+        expect(await emitted()).toBe("reopened\n");
+    });
+
+    test("of several past the cursor only the standing one prints", async () => {
+        await box.append(approve, reopen, drop);
+        expect(await emitted()).toBe("dropped\n");
+        await box.append(approve, drop, reopen);
+        expect(await emitted()).toBe("reopened\n");
+    });
+
+    test("the user's thread activity on an approved doc reads as reopened, a held draft included", async () => {
+        await box.append(approve);
+        await emitted();
+        await box.comment("cold path", "One more thing");
+        expect(await emitted()).toBe('reopened | new c1 "Findings"\n');
+
+        await box.append({ type: "resolve", by: "user", id: "c1" }, drop);
+        await emitted();
+        await box.comment("Retry queue", "Held", { draft: true });
+        const log = await events();
+        const last = log.at(-1)!;
+        expect(wakeReason(last, foldLog(log))).toBeUndefined();
+        expect(docWake(last, foldLog(log))).toBe("reopened");
+        expect(await emitted()).toBe("reopened\n");
+    });
+
+    test("an agent event on an approved doc wakes nothing", async () => {
+        const id = await box.comment("cold path", "Why?");
+        await box.append({ type: "resolve", by: "user", id }, approve);
+        await emitted();
+        await box.append({ type: "reply", by: "agent", id, text: "Noted" });
+        const log = await events();
+        expect(docWake(log.at(-1)!, foldLog(log))).toBeUndefined();
+        expect(await emitted()).toBe("");
+    });
+
+    test("a drop leaves waiting threads in the line", async () => {
+        await box.comment("cold path", "Why?");
+        await box.append(drop);
+        expect(await emitted()).toBe('dropped | new c1 "Findings"\n');
+    });
+
+    test("finish lists the threads handed over, under no other word", async () => {
+        const answered = await box.comment("cold path", "Why?");
+        const held = await box.comment("Retry queue", "Held", { draft: true });
+        await box.append({ type: "reply", by: "agent", id: answered, text: "Because" });
+        await emitted();
+        const fresh = await box.comment("Title", "Rename?");
+        await box.append({ type: "finish", by: "user", ids: [answered, held, fresh] });
+        expect(await emitted()).toBe("finish c1 c2 c3\n");
+        expect((await events()).at(-1)).toMatchObject({ type: "cursor", ids: ["c1", "c2", "c3"] });
+        expect(await emitted()).toBe("");
+    });
+
+    test("finish on a dropped doc leaves reopened out", async () => {
+        const id = await box.comment("cold path", "Why?");
+        await box.append(drop);
+        await emitted();
+        await box.append({ type: "finish", by: "user", ids: [id] });
+        expect((await box.state()).verdict).toMatchObject({ state: "open", seq: 4 });
+        expect(await emitted()).toBe("finish c1\n");
+    });
+
+    test("a finish prints only the threads still waiting on the agent", async () => {
+        const settled = await box.comment("cold path", "Why?");
+        const answered = await box.comment("Retry queue", "Which?");
+        const open = await box.comment("Title", "Rename?");
+        await emitted();
+        await box.append(
+            { type: "finish", by: "user", ids: [settled, answered, open] },
+            { type: "resolve", by: "agent", id: settled },
+            { type: "reply", by: "agent", id: answered, text: "The tile one" },
+        );
+        expect(await emitted()).toBe("finish c3\n");
+    });
+
+    test("a finish whose threads are settled, or that a verdict cleared, prints nothing", async () => {
+        const id = await box.comment("cold path", "Why?");
+        await emitted();
+        await box.append(
+            { type: "finish", by: "user", ids: [id] },
+            { type: "resolve", by: "agent", id },
+        );
+        expect(await emitted()).toBe("");
+        expect((await box.state()).cursors.watch).toBe(4);
+
+        const next = await box.comment("Retry queue", "Which?");
+        await emitted();
+        await box.append(
+            { type: "finish", by: "user", ids: [next] },
+            { ...approve, closed: [next] },
+        );
+        expect(await emitted()).toBe("approved\n");
+    });
+
+    test("a verdict and a finish each end a waiting watch", async () => {
+        const id = await box.comment("cold path", "Why?");
+        await emitted();
+        const finished = await watchDefault(async () => {
+            await box.append({ type: "finish", by: "user", ids: [id] });
+        });
+        expect(finished.lines).toEqual(["finish c1\n"]);
+        const approved = await watchDefault(async () => {
+            await box.append({ ...approve, closed: [id] });
+        });
+        expect(approved.lines).toEqual(["approved\n"]);
     });
 });
 

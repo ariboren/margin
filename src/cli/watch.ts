@@ -14,7 +14,13 @@ import {
 import { LockTimeoutError } from "../core/lock.ts";
 import { readLog, sidecar, transact } from "../core/log.ts";
 import { withPresence } from "../server/presence.ts";
-import { applyEvent, emptyState, needsAgent, type DocState } from "../core/threads.ts";
+import {
+    applyEvent,
+    emptyState,
+    finishRemaining,
+    needsAgent,
+    type DocState,
+} from "../core/threads.ts";
 import { locate, viewOf, type DocView } from "./doc.ts";
 import { formatWatch, type CompactLine } from "./format.ts";
 
@@ -37,6 +43,8 @@ export interface WaitOptions {
  * retract wakes when it leaves its thread waiting on the agent in `state` (the fold at or after
  * the event): a resolve taken back after a watch cursor passed the thread without printing it
  * would otherwise strand it. It reads as new while the user's last message is the thread's first.
+ * A finish request wakes for the threads it hands over, held drafts included: no `send` is logged
+ * for those, so `finish` is the only word they wake under.
  */
 export function wakeReason(event: Event, state: DocState): WakeReason | undefined {
     switch (event.type) {
@@ -57,9 +65,37 @@ export function wakeReason(event: Event, state: DocState): WakeReason | undefine
             return event.by === "user" ? "reply" : undefined;
         case "reject":
             return event.note ? "rejected" : undefined;
+        case "finish":
+            return "finish";
         default:
             return undefined;
     }
+}
+
+/**
+ * The doc-level wake of `event`: a verdict, or the user's event that put an approved or dropped
+ * doc back to open, which the fold records by giving the open verdict that event's seq. In a
+ * `state` folded past the event only the one that set the standing status still reads as a reopen.
+ */
+export function docWake(event: Event, state: DocState): WakeReason | undefined {
+    if (event.type === "verdict") return event.state === "open" ? "reopened" : event.state;
+    const { verdict } = state;
+    return verdict?.state === "open" && verdict.seq === event.seq ? "reopened" : undefined;
+}
+
+function wakes(event: Event, state: DocState): boolean {
+    return wakeReason(event, state) !== undefined || docWake(event, state) !== undefined;
+}
+
+/**
+ * The threads of the finish request still waiting on the agent. One it answered without
+ * resolving waits on the user, so the request stops being announced once none is left.
+ */
+export function finishWaiting(state: DocState): ThreadId[] {
+    return finishRemaining(state).filter((id) => {
+        const thread = state.threads.get(id);
+        return thread !== undefined && needsAgent(thread);
+    });
 }
 
 function wakeIds(event: Event): ThreadId[] {
@@ -68,23 +104,35 @@ function wakeIds(event: Event): ThreadId[] {
 }
 
 /**
- * The batch woken after `afterSeq`: each thread that still waits on the agent, grouped by the
- * reason it first woke, with the heading path when a group shares one (`doc` when the group is
- * all doc notes). Undefined when none do.
+ * The batch woken after `afterSeq`. First the doc's status if it changed since, as it stands now:
+ * of several verdicts and reopens only the last matters. Then a finish request made since, with
+ * the threads it still leaves to the agent; it implies the doc is open, so `reopened` is left out
+ * beside it. Then each other thread that still waits on the agent, grouped by the reason it first
+ * woke, with the heading path when a group shares one (`doc` when the group is all doc notes).
+ * Undefined when there is nothing to say.
  */
 export function watchLine(
     view: DocView,
     events: readonly Event[],
     afterSeq: number,
 ): CompactLine | undefined {
+    const { verdict, finish } = view.state;
+    const handed = finish && finish.seq > afterSeq ? finishWaiting(view.state) : [];
+    const groups: CompactLine["groups"] = [];
+    if (verdict && verdict.seq > afterSeq && (verdict.state !== "open" || handed.length === 0)) {
+        groups.push({ reason: verdict.state === "open" ? "reopened" : verdict.state, ids: [] });
+    }
+    if (handed.length > 0) groups.push({ reason: "finish", ids: handed });
+
     const reasons = new Map<ThreadId, WakeReason>();
     for (const event of events) {
         if (event.seq <= afterSeq) continue;
         const reason = wakeReason(event, view.state);
         if (!reason) continue;
-        for (const id of wakeIds(event)) if (!reasons.has(id)) reasons.set(id, reason);
+        for (const id of wakeIds(event)) {
+            if (!reasons.has(id) && !handed.includes(id)) reasons.set(id, reason);
+        }
     }
-    const groups: CompactLine["groups"] = [];
     for (const [id, reason] of reasons) {
         const thread = view.state.threads.get(id);
         if (!thread || !needsAgent(thread)) continue;
@@ -103,7 +151,7 @@ export function watchLine(
 }
 
 function hasWakeAfter(events: readonly Event[], state: DocState, seq: number): boolean {
-    return events.some((event) => event.seq > seq && wakeReason(event, state) !== undefined);
+    return events.some((event) => event.seq > seq && wakes(event, state));
 }
 
 /**
@@ -202,7 +250,7 @@ export class WakeTail {
         const now = Date.now();
         for (const event of events) {
             applyEvent(this.state, event);
-            if (wakeReason(event, this.state) === undefined) continue;
+            if (!wakes(event, this.state)) continue;
             this.lastWakeSeq = event.seq;
             // A backlog has already waited long enough.
             this.first ??= this.started ? now : -Infinity;
