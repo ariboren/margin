@@ -4,6 +4,7 @@
 // with no daemon, straight on the core modules.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { LockTimeoutError } from "../core/lock.ts";
 import type { Ack, ThreadId } from "../core/model.ts";
@@ -24,6 +25,8 @@ export interface Io {
     isTTY: boolean;
     write(text: string): void;
     stdin(): Promise<string>;
+    /** One line typed in answer to `question`; set only when a person is at the terminal. */
+    ask?(question: string): Promise<string>;
     /** Stops `watch` and `pending --wait`. */
     signal?: AbortSignal;
 }
@@ -102,7 +105,7 @@ export async function run(argv: string[], io: Io, server?: ServerCommands): Prom
                 if (!server) return badArgs(io, "no daemon support");
                 return await server[command](io);
             case "setup":
-                return setup(io, { user: values.user, force: values.force });
+                return await setup(io, { user: values.user, force: values.force });
             case "watch":
             case "pending": {
                 const target = await resolveDoc({ explicit: rest[0], cwd: io.cwd, env: io.env });
@@ -200,13 +203,31 @@ async function threadCommand(
     }
 }
 
+/** Reads one answer per call; input that ends before a line arrives answers with nothing. */
+export function lineAsker(
+    input: NodeJS.ReadableStream,
+    output: NodeJS.WritableStream,
+): NonNullable<Io["ask"]> {
+    return async (question) => {
+        const lines = createInterface({ input, output });
+        try {
+            const ended = new Promise<string>((resolve) => lines.once("close", () => resolve("")));
+            return await Promise.race([lines.question(question), ended]);
+        } finally {
+            lines.close();
+        }
+    };
+}
+
 export function processIo(): Io {
+    const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
     return {
         cwd: process.cwd(),
         env: process.env,
         isTTY: process.stdout.isTTY === true,
         write: (text) => process.stdout.write(text),
         stdin: async () => await Bun.stdin.text(),
+        ...(interactive ? { ask: lineAsker(process.stdin, process.stdout) } : {}),
     };
 }
 

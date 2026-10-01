@@ -1,11 +1,19 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { createAnchor } from "../core/anchor.ts";
 import { readLog } from "../core/log.ts";
 import { createThread } from "../core/threads.ts";
 import { connectedAgents } from "../server/presence.ts";
-import { agentHelp, run, stripFinalNewline, type Io, type ServerCommands } from "./main.ts";
+import {
+    agentHelp,
+    lineAsker,
+    run,
+    stripFinalNewline,
+    type Io,
+    type ServerCommands,
+} from "./main.ts";
 import { DOC, sandbox, type Sandbox } from "./testing.ts";
 
 const MAIN = join(import.meta.dir, "main.ts");
@@ -280,4 +288,24 @@ test("one trailing newline is stripped from stdin, no more", () => {
     expect(stripFinalNewline("a\r\n")).toBe("a");
     expect(stripFinalNewline("a\n\n")).toBe("a\n");
     expect(stripFinalNewline("a")).toBe("a");
+});
+
+describe("lineAsker", () => {
+    test("prints the question and answers with the typed line", async () => {
+        const input = new PassThrough();
+        const output = new PassThrough();
+        const ask = lineAsker(input, output);
+        const answer = ask("Overwrite it? [y/N] ");
+        input.write("y\n");
+        expect(await answer).toBe("y");
+        expect(output.read()?.toString()).toContain("Overwrite it? [y/N] ");
+    });
+
+    test("input that ends unanswered is an empty answer, so the default applies", async () => {
+        const input = new PassThrough();
+        const ask = lineAsker(input, new PassThrough());
+        const answer = ask("Overwrite it? [y/N] ");
+        input.end();
+        expect(await answer).toBe("");
+    });
 });

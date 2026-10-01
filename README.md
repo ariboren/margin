@@ -71,16 +71,16 @@ Tell the agent the doc is open in margin. Select a sentence, press `c`, type a q
 
 ## Connecting an agent
 
-The agent works through the `margin` CLI and nothing else. It never reads the sidecar and never rewrites the whole file. `margin agent-help` prints the complete instructions in 1,479 bytes; the Claude Code skill and the AGENTS.md snippet are generated from that text. They tell the agent to answer in the doc, as replies and suggestions, and to post in chat only when you've asked for updates.
+The agent works through the `margin` CLI and nothing else. It never reads the sidecar and never rewrites the whole file. `margin agent-help` prints the complete instructions in 1,488 bytes; the Claude Code skill and the AGENTS.md snippet are generated from that text. They tell the agent to answer in the doc, as replies and suggestions, and to post in chat only when you've asked for updates.
 
-**Claude Code.** `margin setup` installs the skill in the current project, `margin setup --user` installs it for all your projects. Run it again after upgrading margin. It won't overwrite a skill you've edited unless you pass `--force`.
+**Claude Code.** `margin setup` asks where to install the skill (this project, all your projects, or not at all) and asks before overwriting a skill that differs from this version's. Run it again after upgrading margin. `--user` and `--force` answer those questions up front, and when it isn't run from a terminal (by an agent or a script) it never asks: it installs in the current project and refuses to overwrite a changed skill without `--force`.
 
 ```sh
 margin setup           # .claude/skills/margin/
 margin setup --user    # ~/.claude/skills/margin/
 ```
 
-**Other agents.** `margin setup` also prints a snippet to paste into your `AGENTS.md`, which margin never edits itself. The same text is in [AGENTS.snippet.md](AGENTS.snippet.md). Any agent that can run shell commands can follow it, but only Claude Code has been tested end to end.
+**Other agents.** `margin setup` also offers a snippet to paste into your `AGENTS.md`, which margin never edits itself. The same text is in [AGENTS.snippet.md](AGENTS.snippet.md). Any agent that can run shell commands can follow it, but only Claude Code has been tested end to end.
 
 **Who is answering.** The page shows the connected agent beside the filename, with its name on every reply. The name comes from `--as <name>` on any margin command, else the `MARGIN_AGENT` environment variable, else the title of the Claude Code session running the command (the one in its tab, so a renamed session shows under its new name), else the client margin detects (Claude Code, Codex or Cursor, from the markers they set in their shells). Several agents on one doc each appear under their own name.
 
