@@ -76,6 +76,17 @@ function spliced(original: Buffer, ...edits: [exact: string, replace: string][])
     return Buffer.from(text, "utf8");
 }
 
+/** The thread once the daemon has folded the CLI's write (its watcher polls the log). */
+async function threadAfterSync(tab: Tab, id: ThreadId, state: string) {
+    const deadline = Date.now() + 3_000;
+    let thread = await tab.thread(id);
+    while (thread?.state !== state && Date.now() < deadline) {
+        await new Promise((done) => setTimeout(done, 50));
+        thread = await tab.thread(id);
+    }
+    return thread;
+}
+
 function lastStdout(agent: FakeAgent, command: string): string {
     return agent.calls.findLast((call) => call.argv[0] === command)?.stdout ?? "";
 }
@@ -96,10 +107,36 @@ describe("loop against a live daemon", () => {
         expect(byteLength(`${batch!.acks[0]}\n`)).toBeLessThanOrEqual(budget.ack);
         expect(bytes().equals(original)).toBe(true);
 
-        expect(await tab.accept(id)).toEqual({ ok: true });
+        expect(await tab.accept(id)).toMatchObject({ ok: true });
         expect(bytes().equals(spliced(original, [quote, replace]))).toBe(true);
         expect((await tab.thread(id))?.state).toBe("resolved");
         expect((await agent.pending()).threads).toEqual([]);
+    });
+
+    test("a doc note: `doc` on the watch line, no quote in pending, reply and resolve; suggest refused", async () => {
+        const { tab, agent, original, bytes } = await world();
+        const { id } = await tab.post("comment", { text: "Tighten the whole intro." });
+
+        const batch = await agent.handleBatch(() => ({ reply: "Will do.", resolve: true }), 5_000);
+        expect(lastStdout(agent, "watch")).toBe(`new ${id} doc\n`);
+        expect(batch?.line).toEqual({
+            form: "compact",
+            groups: [{ reason: "new", ids: [id], doc: true }],
+        });
+        expect(lastStdout(agent, "pending")).toBe(
+            `${id} open doc\n  user: Tighten the whole intro.\n`,
+        );
+        expect(batch?.tasks).toEqual([{ id, quote: "", messages: ["Tighten the whole intro."] }]);
+        expect(batch?.acks).toEqual([`ok ${id} resolved`]);
+        const thread = await threadAfterSync(tab, id, "resolved");
+        expect(thread).toMatchObject({ state: "resolved", detached: false });
+        expect(thread?.anchor).toBeUndefined();
+
+        const second = (await tab.post("comment", { text: "And the title?" })).id;
+        const refused = await agent.handleBatch(() => ({ suggest: "New title" }), 5_000);
+        expect(refused?.acks).toEqual([`err ${second} no-anchor`]);
+        expect((await threadAfterSync(tab, second, "working"))?.state).toBe("working");
+        expect(bytes().equals(original)).toBe(true);
     });
 
     test("a large batch is one watch line and one pending", async () => {
@@ -125,15 +162,16 @@ describe("loop against a live daemon", () => {
         expect(batch?.acks).toEqual(batch!.tasks.map((task) => `ok ${task.id} replied`));
         expect((await agent.pending()).threads).toEqual([]);
 
-        for (const id of ids) expect(await tab.accept(id)).toEqual({ ok: true });
+        for (const id of ids) expect(await tab.accept(id)).toMatchObject({ ok: true });
         const expected = spliced(original, ...[...replacements]);
         expect(bytes().equals(expected)).toBe(true);
     });
 
-    test("--apply writes at once; suggestions only downgrades it", async () => {
+    test("--apply writes at once, as does the doc's auto-apply; off, it suggests", async () => {
         const { tab, agent, original, bytes } = await world();
-        const [first, second] = [QUOTES[1]!, QUOTES[2]!];
+        const [first, second, third] = [QUOTES[1]!, QUOTES[2]!, QUOTES[4]!];
         const apply: Policy = (task) => ({ suggest: `${task.quote} (applied)`, apply: true });
+        const propose: Policy = (task) => ({ suggest: `${task.quote} (applied)` });
 
         const applied = await tab.comment(first, "Fix this now.");
         const batch = await agent.handleBatch(apply, 5_000);
@@ -141,14 +179,21 @@ describe("loop against a live daemon", () => {
         const afterApply = spliced(original, [first, `${first} (applied)`]);
         expect(bytes().equals(afterApply)).toBe(true);
 
-        await tab.post("setting", { key: "suggestionsOnly", value: true });
-        const held = await tab.comment(second, "Fix this too.");
-        const downgraded = await agent.handleBatch(apply, 5_000);
-        expect(downgraded?.acks).toEqual([`ok ${held} downgraded`]);
-        expect(bytes().equals(afterApply)).toBe(true);
+        await tab.post("setting", { key: "autoApply", value: true });
+        const auto = await tab.comment(second, "Fix this too.");
+        const autoBatch = await agent.handleBatch(propose, 5_000);
+        expect(autoBatch?.acks).toEqual([`ok ${auto} replied`]);
+        const afterAuto = spliced(afterApply, [second, `${second} (applied)`]);
+        expect(bytes().equals(afterAuto)).toBe(true);
 
-        expect(await tab.accept(held)).toEqual({ ok: true });
-        expect(bytes().equals(spliced(afterApply, [second, `${second} (applied)`]))).toBe(true);
+        await tab.post("setting", { key: "autoApply", value: false });
+        const held = await tab.comment(third, "And this.");
+        const heldBatch = await agent.handleBatch(propose, 5_000);
+        expect(heldBatch?.acks).toEqual([`ok ${held} replied`]);
+        expect(bytes().equals(afterAuto)).toBe(true);
+
+        expect(await tab.accept(held)).toMatchObject({ ok: true });
+        expect(bytes().equals(spliced(afterAuto, [third, `${third} (applied)`]))).toBe(true);
     });
 
     test("reject with a note wakes the agent; without one it resolves quietly", async () => {
@@ -164,7 +209,7 @@ describe("loop against a live daemon", () => {
         const woken = await agent.handleBatch(() => retry, 5_000);
         expect(woken?.line).toMatchObject({ groups: [{ reason: "rejected", ids: [id] }] });
         expect(woken?.tasks[0]?.messages).toEqual([note]);
-        expect(await tab.accept(id)).toEqual({ ok: true });
+        expect(await tab.accept(id)).toMatchObject({ ok: true });
         expect(bytes().equals(spliced(original, [quote, retry.suggest]))).toBe(true);
 
         const quiet = await tab.comment(QUOTES[4]!, "Drop this?");
