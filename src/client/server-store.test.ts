@@ -115,6 +115,48 @@ describe("ServerStore", () => {
         ]);
     });
 
+    test("verdict and finish post their requests and answer without the version", async () => {
+        const fake = fakeTransport(wire(4));
+        const store = new ServerStore(fake.transport, wire(4));
+        fake.answer({ ok: false, reason: "unresolved", ids: ["c2"], version: 4 });
+        expect(await store.setVerdict({ state: "approved" })).toEqual({
+            ok: false,
+            reason: "unresolved",
+            ids: ["c2"],
+        });
+        fake.answer({ ok: true, seq: 5, version: 5 });
+        fake.advance(wire(5));
+        expect(await store.setVerdict({ state: "approved", note: "Ship it", asIs: true })).toEqual({
+            ok: true,
+            seq: 5,
+        });
+        fake.answer({ ids: ["c3"], unapplied: ["c3"], seq: 6, version: 6 });
+        fake.advance(wire(6));
+        expect(await store.requestFinish()).toEqual({ ids: ["c3"], unapplied: ["c3"], seq: 6 });
+        expect(fake.posted).toEqual([
+            { name: "verdict", body: { state: "approved" } },
+            { name: "verdict", body: { state: "approved", note: "Ship it", asIs: true } },
+            { name: "finish", body: {} },
+        ]);
+    });
+
+    test("passes the verdict and the finish request through, absent when the daemon sends none", () => {
+        const verdict = {
+            state: "approved",
+            seq: 7,
+            at: "2026-10-01T09:00:00.000Z",
+            hash: "h",
+        } as const;
+        const finish = { seq: 5, at: "2026-10-01T08:00:00.000Z", ids: ["c1" as const] };
+        const fake = fakeTransport(wire(7));
+        const store = new ServerStore(fake.transport, wire(7));
+        expect(store.snapshot().verdict).toBeUndefined();
+        expect(store.snapshot().finish).toBeUndefined();
+        fake.push(wire(8, SOURCE, { verdict, finish }));
+        expect(store.snapshot().verdict).toEqual(verdict);
+        expect(store.snapshot().finish).toEqual(finish);
+    });
+
     test("parses the pushed source and passes presence through", () => {
         const fake = fakeTransport(wire(3, SOURCE, { agents: [FOREMAN] }));
         const store = new ServerStore(fake.transport, wire(3, SOURCE, { agents: [FOREMAN] }));

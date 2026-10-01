@@ -259,6 +259,38 @@ export interface ReanchorEvent extends EventBase {
     anchors: Partial<Record<ThreadId, Anchor>>;
 }
 
+/** A doc's review status. `open` is the default and what a reopen returns to. */
+export type VerdictState = "open" | "approved" | "dropped";
+
+/**
+ * User only: the agent CLI has no command that writes one. Sets the doc's status; any state may
+ * follow any other. An approval is only logged with no unresolved thread left (see
+ * `isUnresolved`), so "approve as is" names the threads it closes in `closed` and the fold
+ * resolves them: no per-thread events, nothing to retract, no wake for them. Edits never clear a
+ * verdict; `hash` is how a reader tells the doc changed since.
+ */
+export interface VerdictEvent extends EventBase {
+    type: "verdict";
+    state: VerdictState;
+    /** `hashText` of the doc source when the verdict was given. */
+    hash: string;
+    /** One line from the user to the agent. */
+    note?: string;
+    /** Threads closed without action by "approve as is"; a pending suggestion on one is rejected. */
+    closed?: ThreadId[];
+}
+
+/**
+ * User only. A request, not a verdict: the user asks the agent to settle what is left. `ids` are
+ * the threads handed over, every one unresolved once margin had accepted the pending agent
+ * suggestions and sent the held drafts; the fold sets them to `open` so `pending` returns them.
+ * A doc that was approved or dropped is open again.
+ */
+export interface FinishEvent extends EventBase {
+    type: "finish";
+    ids: ThreadId[];
+}
+
 export type Event =
     | CommentEvent
     | ReplyEvent
@@ -277,7 +309,9 @@ export type Event =
     | SendEvent
     | SettingEvent
     | OutsideEvent
-    | ReanchorEvent;
+    | ReanchorEvent
+    | VerdictEvent
+    | FinishEvent;
 
 export type EventType = Event["type"];
 
@@ -342,6 +376,46 @@ export function isDocNote(thread: Pick<Thread, "anchor">): boolean {
     return thread.anchor === undefined;
 }
 
+/** Still counts against an approval: every state but `resolved`, detached threads included. */
+export function isUnresolved(thread: Pick<Thread, "state">): boolean {
+    return thread.state !== "resolved";
+}
+
+/**
+ * The doc's status as folded from the log. Absent until the first verdict, which reads as open.
+ * The user's own thread activity after an approval or a drop (a comment, held or not, a reply, a
+ * suggestion, a reject with a note, a thread reopened, undeleted or brought back by a retract, a
+ * finish request) puts the doc back to `open` with no verdict event; agent events never do.
+ */
+export interface DocVerdict {
+    state: VerdictState;
+    /**
+     * Seq of the event that set `state`: the verdict event, or the user event that reopened the
+     * doc. An `open` verdict whose seq is past an agent cursor is a reopen that agent has not
+     * heard of yet.
+     */
+    seq: number;
+    at: IsoTime;
+    /**
+     * The doc hash at the verdict; the doc changed since when the current hash differs. Absent
+     * after an automatic reopen, which no verdict event recorded.
+     */
+    hash?: string;
+    note?: string;
+    /** The threads an "approve as is" closed. */
+    closed?: ThreadId[];
+}
+
+/**
+ * The last finish request, kept until the next verdict. It is outstanding while any of `ids` is
+ * still unresolved (and not deleted); once none is, the agent is done and the user can approve.
+ */
+export interface FinishRequest {
+    seq: number;
+    at: IsoTime;
+    ids: ThreadId[];
+}
+
 // In-memory store behind the UI. The mockup and the server implement it; components use only this.
 
 export interface DocSettings {
@@ -363,6 +437,20 @@ export interface DocSnapshot {
     missing: boolean;
     /** Seq of the last event folded in. */
     version: number;
+    /** Absent until the first verdict: the doc is open. */
+    verdict?: DocVerdict;
+    /** The last finish request since the last verdict, outstanding or done. */
+    finish?: FinishRequest;
+}
+
+/** An approval is refused while threads are unresolved; `ids` are those threads. */
+export type VerdictResult = { ok: true } | { ok: false; reason: "unresolved"; ids: ThreadId[] };
+
+export interface FinishResult {
+    /** The threads handed to the agent; empty when nothing was left, and then nothing is logged. */
+    ids: ThreadId[];
+    /** Among `ids`: pending agent suggestions that no longer apply, left pending. */
+    unapplied: ThreadId[];
 }
 
 export type SaveResult =
@@ -392,6 +480,22 @@ export interface DocStore {
     setHold(on: boolean): Promise<void>;
     sendAll(): Promise<void>;
     setSetting(key: DocSettingKey, value: boolean): Promise<void>;
+    /**
+     * `approved` is refused while threads are unresolved, unless `asIs`: then the store closes
+     * every one of them with the verdict, applying no suggestion. `dropped` leaves threads alone;
+     * `open` reopens, and does nothing on a doc that is already open. Never on the undo stack.
+     */
+    setVerdict(input: {
+        state: VerdictState;
+        note?: string;
+        asIs?: boolean;
+    }): Promise<VerdictResult>;
+    /**
+     * Asks the agent to finish: accepts every pending agent suggestion that still applies, sends
+     * held drafts, and hands each thread still unresolved to the agent. The doc stays (or goes
+     * back to) open; the user approves after.
+     */
+    requestFinish(): Promise<FinishResult>;
     dismissChangedOnDisk(): void;
     /** The link to the host behind the store; a store without one (in memory) is always live. */
     status?(): StoreStatus;
@@ -409,12 +513,21 @@ export interface StoreStatus {
 
 // CLI output shapes. Text renderings are what the agent reads; these are the renderers' input.
 
-export type WakeReason = "new" | "reply" | "rejected";
+/**
+ * `new`, `reply`, `rejected` and `finish` are about threads. `approved`, `dropped` and `reopened`
+ * are about the doc: the verdict the user gave, or the doc going back to open.
+ */
+export type WakeReason =
+    "new" | "reply" | "rejected" | "approved" | "dropped" | "reopened" | "finish";
 
 /** One compact line per batch; the agent then reads the threads through `pending`. */
 export interface WatchLine {
     form: "compact";
-    /** `doc`: every id is a doc note; printed as `doc` where the path would go. */
+    /**
+     * `doc`: every id is a doc note; printed as `doc` where the path would go. A group for a
+     * doc-level reason (`approved`, `dropped`, `reopened`) has empty `ids` and neither `path` nor
+     * `doc`; `finish` lists the threads handed over.
+     */
     groups: { reason: WakeReason; ids: ThreadId[]; path?: string; doc?: true }[];
 }
 
@@ -444,9 +557,28 @@ export interface PendingEdit {
     hunks: string[];
 }
 
+/**
+ * The header line of `pending`: what a session starting fresh needs to know about the doc.
+ * Every field is left out when it has nothing to say.
+ */
+export interface PendingReview {
+    /** The standing verdict; absent while the doc is open. */
+    verdict?: "approved" | "dropped";
+    /** With `verdict`: the doc hash differs from the one the verdict recorded. */
+    changed?: true;
+    /** With `verdict`: the user's note. */
+    note?: string;
+    /** A finish request is outstanding: settle every thread, ask nothing, then stop. */
+    finish?: true;
+    /** The doc went back to open past the pending cursor; reported once. */
+    reopened?: true;
+}
+
 export interface PendingJson {
     threads: PendingThread[];
     edits: PendingEdit[];
+    /** Absent when the doc is open with no finish request and no reopen to report. */
+    review?: PendingReview;
 }
 
 export interface ShowOutput {

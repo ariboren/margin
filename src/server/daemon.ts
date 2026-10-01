@@ -497,6 +497,9 @@ async function mutate(
             return await session.sendAll();
         case "setting":
             return await session.setSetting(settingKey(body.key), flag(body.value));
+        case "verdict":
+        case "finish":
+            throw new WireFailure(404, "not-found");
     }
 }
 

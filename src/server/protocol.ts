@@ -10,12 +10,17 @@ import type {
     Anchor,
     DocSettingKey,
     DocSettings,
+    DocVerdict,
     EditEvent,
+    FinishRequest,
+    FinishResult,
     IsoTime,
     Offset,
     SaveResult,
     Thread,
     ThreadId,
+    VerdictResult,
+    VerdictState,
 } from "../core/model.ts";
 
 /** Bumped on any incompatible wire change; a CLI refuses a daemon that speaks another. */
@@ -84,6 +89,10 @@ export interface WireSnapshot {
      * session snapshot.
      */
     agents?: AgentIdentity[];
+    /** Absent until the first verdict (the doc is open), and from a daemon older than the field. */
+    verdict?: DocVerdict;
+    /** The last finish request since the last verdict, outstanding or done. */
+    finish?: FinishRequest;
 }
 
 /** Id of the page's `application/json` script element holding `PageBoot`. */
@@ -158,6 +167,22 @@ export interface Mutations {
     hold: { req: { on: boolean }; res: Ok };
     "send-all": { req: Record<string, never>; res: Ok };
     setting: { req: { key: DocSettingKey; value: boolean }; res: Ok };
+    /**
+     * Sets the doc's status; the daemon records the doc hash. `approved` answers `unresolved`
+     * with the thread ids while any thread is unresolved, unless `asIs`: then the daemon closes
+     * the threads unresolved at that moment in the one verdict event. `seq`: the verdict event,
+     * absent when nothing was logged (a refusal, or a reopen of an open doc).
+     */
+    verdict: {
+        req: { state: VerdictState; note?: string; asIs?: boolean };
+        res: VerdictResult & Partial<Seq>;
+    };
+    /**
+     * Under one lock: accepts each pending agent suggestion that still applies, sends held
+     * drafts, then logs one finish event naming every thread still unresolved. `seq`: that
+     * event, absent when nothing was left to hand over.
+     */
+    finish: { req: Record<string, never>; res: FinishResult & Partial<Seq> };
 }
 
 export type MutationName = keyof Mutations;
@@ -185,6 +210,8 @@ export const MUTATIONS: readonly MutationName[] = [
     "hold",
     "send-all",
     "setting",
+    "verdict",
+    "finish",
 ];
 
 export interface Ok {

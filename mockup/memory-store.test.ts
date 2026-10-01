@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createAnchor } from "../src/core/anchor.ts";
-import { decodeSource } from "../src/core/blocks.ts";
-import type { Thread, ThreadId } from "../src/core/model.ts";
+import { decodeSource, hashText } from "../src/core/blocks.ts";
+import { isUnresolved, type Thread, type ThreadId } from "../src/core/model.ts";
 import { attachScriptedAgent, proposeEdit } from "./agent.ts";
-import { MemoryStore, type Clock } from "./memory-store.ts";
+import { MemoryStore, type Clock, type DocWake, type Wake } from "./memory-store.ts";
 import { planSeeds } from "./seed.ts";
 
 class ManualClock implements Clock {
@@ -202,6 +202,215 @@ describe("memory store", () => {
         expect(clock.now() - Date.parse(thread(store, id).lastActivity)).toBeGreaterThan(
             10 * 60_000,
         );
+    });
+});
+
+describe("memory store verdict and finish", () => {
+    /** No scripted agent: the tests play the agent, so nothing moves on its own. */
+    function bare() {
+        const store = new MemoryStore("doc.md", doc, new ManualClock());
+        const wakes: Wake[] = [];
+        const docWakes: DocWake[] = [];
+        store.onWake = (batch) => wakes.push(...batch);
+        store.onVerdict = (reason) => docWakes.push(reason);
+        return { store, wakes, docWakes };
+    }
+
+    test("approve is refused while threads are unresolved, and names them", async () => {
+        const { store, docWakes } = bare();
+        const open = await store.comment({ anchor: anchorOn(store, "Title"), text: "Rename?" });
+        const replied = await store.comment({ text: "A doc note" });
+        store.agentReply(replied, "Noted.");
+        const gone = await store.comment({ anchor: anchorOn(store, "aside"), text: "Drop" });
+        await store.deleteThread(gone);
+        expect(await store.setVerdict({ state: "approved" })).toEqual({
+            ok: false,
+            reason: "unresolved",
+            ids: [open, replied],
+        });
+        expect(store.snapshot().verdict).toBeUndefined();
+        await store.resolve(open);
+        await store.resolve(replied);
+        expect(await store.setVerdict({ state: "approved", note: "Ship it" })).toEqual({
+            ok: true,
+        });
+        const { verdict, version, doc: parsed } = store.snapshot();
+        expect(verdict).toMatchObject({
+            state: "approved",
+            seq: version,
+            hash: hashText(parsed.source),
+            note: "Ship it",
+        });
+        expect(verdict?.closed).toBeUndefined();
+        expect(docWakes).toEqual(["approved"]);
+    });
+
+    test("approve as is closes every unresolved thread and applies no suggestion", async () => {
+        const { store, wakes } = bare();
+        const suggested = await store.comment({ anchor: anchorOn(store, quote), text: "Shorter" });
+        store.agentSuggest(suggested, "Shorter.", { apply: false });
+        await store.setHold(true);
+        const draft = await store.comment({ anchor: anchorOn(store, "Title"), text: "Held" });
+        const done = await store.comment({ text: "Already settled" });
+        await store.resolve(done);
+        wakes.length = 0;
+        expect(await store.setVerdict({ state: "approved", asIs: true })).toEqual({ ok: true });
+        expect(store.snapshot().threads.map((each) => each.state)).toEqual([
+            "resolved",
+            "resolved",
+            "resolved",
+        ]);
+        expect(thread(store, suggested).suggestion?.status).toBe("rejected");
+        expect(store.snapshot().doc.source).toBe(doc);
+        expect(store.snapshot().verdict).toMatchObject({
+            state: "approved",
+            closed: [suggested, draft],
+        });
+        expect(wakes).toEqual([]);
+    });
+
+    test("drop leaves open threads alone; reopen goes back to open and says so once", async () => {
+        const { store, docWakes } = bare();
+        const id = await store.comment({ anchor: anchorOn(store, "Title"), text: "Rename?" });
+        expect(await store.setVerdict({ state: "open" })).toEqual({ ok: true });
+        expect(store.snapshot().verdict).toBeUndefined();
+        expect(await store.setVerdict({ state: "dropped", asIs: true })).toEqual({ ok: true });
+        expect(thread(store, id).state).toBe("open");
+        expect(store.snapshot().verdict).toMatchObject({ state: "dropped" });
+        expect(store.snapshot().verdict?.closed).toBeUndefined();
+        await store.setVerdict({ state: "open" });
+        expect(store.snapshot().verdict).toMatchObject({ state: "open" });
+        await store.setVerdict({ state: "open" });
+        expect(docWakes).toEqual(["dropped", "reopened"]);
+    });
+
+    test("an edit never clears the verdict; its hash tells the doc changed since", async () => {
+        const { store } = bare();
+        await store.setVerdict({ state: "approved" });
+        const start = doc.indexOf(quote);
+        await store.saveUnit({ start, before: quote, after: "Rewritten." });
+        const changed = store.snapshot();
+        expect(changed.verdict?.state).toBe("approved");
+        expect(changed.verdict?.hash).not.toBe(hashText(changed.doc.source));
+        await store.saveUnit({ start, before: "Rewritten.", after: quote });
+        expect(store.snapshot().verdict?.hash).toBe(hashText(store.snapshot().doc.source));
+    });
+
+    test("the user's thread activity reopens an approved or dropped doc", async () => {
+        const anchor = (store: MemoryStore) => anchorOn(store, "Title");
+        const acts: [string, (store: MemoryStore, id: ThreadId) => Promise<unknown>][] = [
+            ["comment", (store) => store.comment({ text: "One more" })],
+            ["suggest", (store) => store.suggest({ anchor: anchor(store), replace: "Heading" })],
+            ["reply", (store, id) => store.reply(id, "Actually")],
+            ["reject with a note", (store, id) => store.reject(id, "Try again")],
+            ["reopen", (store, id) => store.reopen(id)],
+        ];
+        for (const [name, act] of acts) {
+            const { store, docWakes } = bare();
+            const id = await store.comment({ anchor: anchor(store), text: "Rename?" });
+            await store.resolve(id);
+            await store.setVerdict({ state: "approved", note: "Ship it" });
+            await act(store, id);
+            const { verdict, version } = store.snapshot();
+            expect([name, verdict]).toEqual([
+                name,
+                { state: "open", seq: version, at: verdict!.at },
+            ]);
+            expect(docWakes).toEqual(["approved", "reopened"]);
+        }
+    });
+
+    test("undeleting reopens only for an unresolved thread; agent activity never does", async () => {
+        const { store, docWakes } = bare();
+        const settled = await store.comment({ text: "Settled" });
+        await store.resolve(settled);
+        await store.deleteThread(settled);
+        const waiting = await store.comment({ text: "Waiting" });
+        await store.deleteThread(waiting);
+        await store.setVerdict({ state: "approved" });
+        await store.undeleteThread(settled);
+        await store.resolve(settled);
+        await store.reject(settled);
+        store.agentFind({ start: doc.indexOf("Title"), end: doc.indexOf("Title") + 5 }, "Heading", {
+            apply: false,
+            note: "Clearer",
+        });
+        expect(store.snapshot().verdict?.state).toBe("approved");
+        await store.undeleteThread(waiting);
+        expect(store.snapshot().verdict?.state).toBe("open");
+        expect(docWakes).toEqual(["approved", "reopened"]);
+    });
+
+    test("finish accepts agent suggestions, sends drafts and hands over the rest", async () => {
+        const { store, wakes } = bare();
+        const accepted = await store.comment({ anchor: anchorOn(store, quote), text: "Shorter" });
+        store.agentSuggest(accepted, "Shorter.", { apply: false });
+        const own = await store.suggest({ anchor: anchorOn(store, "Title"), replace: "Heading" });
+        const replied = await store.comment({ text: "A doc note" });
+        store.agentClaim([replied]);
+        store.agentReply(replied, "Noted.");
+        const working = await store.comment({ text: "Another note" });
+        store.agentClaim([working]);
+        await store.setHold(true);
+        const draft = await store.comment({ anchor: anchorOn(store, "aside"), text: "Held" });
+        const done = await store.comment({ text: "Settled" });
+        await store.resolve(done);
+        wakes.length = 0;
+
+        expect(await store.requestFinish()).toEqual({
+            ids: [own, replied, working, draft],
+            unapplied: [],
+        });
+        const snapshot = store.snapshot();
+        expect(thread(store, accepted)).toMatchObject({ state: "resolved" });
+        expect(thread(store, accepted).suggestion?.status).toBe("accepted");
+        expect(snapshot.doc.source).toContain("Shorter.");
+        expect(snapshot.doc.source).toContain("# Title");
+        expect(thread(store, own).suggestion?.status).toBe("pending");
+        for (const id of [own, replied, working, draft]) {
+            expect(thread(store, id).state).toBe("open");
+        }
+        expect(thread(store, replied).claimed).toBe(true);
+        expect(snapshot.finish).toMatchObject({ seq: snapshot.version, ids: snapshot.finish!.ids });
+        expect(snapshot.finish?.ids).toEqual([own, replied, working, draft]);
+        expect(snapshot.verdict).toBeUndefined();
+        expect(wakes).toEqual(
+            [own, replied, working, draft].map((id) => ({ id, reason: "finish" as const })),
+        );
+    });
+
+    test("a suggestion that no longer applies stays pending and is reported", async () => {
+        const { store } = bare();
+        const id = await store.comment({ anchor: anchorOn(store, "aside"), text: "Reword" });
+        store.agentSuggest(id, "remark", { apply: false });
+        const start = doc.indexOf("A second paragraph");
+        const before = "A second paragraph (with an aside in it) sits here.";
+        await store.saveUnit({ start, before, after: "A second paragraph sits here." });
+        expect(thread(store, id).detached).toBe(true);
+        expect(await store.requestFinish()).toEqual({ ids: [id], unapplied: [id] });
+        expect(thread(store, id)).toMatchObject({ state: "open" });
+        expect(thread(store, id).suggestion?.status).toBe("pending");
+    });
+
+    test("a finish request stays until a verdict, and is done once the agent settles it", async () => {
+        const { store, wakes, docWakes } = bare();
+        expect(await store.requestFinish()).toEqual({ ids: [], unapplied: [] });
+        expect(store.snapshot().finish).toBeUndefined();
+        expect(wakes).toEqual([]);
+
+        const id = await store.comment({ text: "Sort this out" });
+        await store.setVerdict({ state: "dropped" });
+        await store.requestFinish();
+        expect(store.snapshot().verdict?.state).toBe("open");
+        expect(docWakes).toEqual(["dropped", "reopened"]);
+        expect(await store.setVerdict({ state: "approved" })).toMatchObject({ ok: false });
+
+        store.agentResolve(id);
+        const settled = store.snapshot();
+        expect(settled.finish?.ids).toEqual([id]);
+        expect(settled.threads.filter(isUnresolved)).toEqual([]);
+        expect(await store.setVerdict({ state: "approved" })).toEqual({ ok: true });
+        expect(store.snapshot().finish).toBeUndefined();
     });
 });
 

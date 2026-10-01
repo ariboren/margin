@@ -2,19 +2,22 @@ import { signedFromLog } from "./agent.ts";
 import { createAnchor, rebaseAnchor, resolveAnchor } from "./anchor.ts";
 import { hashText } from "./blocks.ts";
 import { transact, type LogTxn } from "./log.ts";
-import type {
-    AppliedEdit,
-    Anchor,
-    DocSettings,
-    EditEvent,
-    Event,
-    EventInput,
-    IsoTime,
-    SourceSplice,
-    Suggestion,
-    Thread,
-    ThreadId,
-    ThreadState,
+import {
+    isUnresolved,
+    type AppliedEdit,
+    type Anchor,
+    type DocSettings,
+    type DocVerdict,
+    type EditEvent,
+    type Event,
+    type EventInput,
+    type FinishRequest,
+    type IsoTime,
+    type SourceSplice,
+    type Suggestion,
+    type Thread,
+    type ThreadId,
+    type ThreadState,
 } from "./model.ts";
 
 /** A working thread with no activity for this long shows as "stalled". */
@@ -52,6 +55,10 @@ export interface DocState {
     agentSeenAt?: IsoTime;
     /** Time of the last outside change. */
     changedOnDisk?: IsoTime;
+    /** Absent until the first verdict: the doc is open. */
+    verdict?: DocVerdict;
+    /** The last finish request since the last verdict; see `finishRemaining`. */
+    finish?: FinishRequest;
     /** Seq of the last event folded in. */
     version: number;
 }
@@ -102,6 +109,9 @@ export function applyEvent(state: DocState, event: Event): DocState {
                   suggestion: thread.suggestion?.status,
               }
             : undefined;
+    const settled =
+        event.by === "user" && state.verdict !== undefined && state.verdict.state !== "open";
+    const wasResolved = thread !== undefined && !isUnresolved(thread);
     applyEventBody(state, event);
     if (before && thread) {
         state.retractable.set(event.seq, {
@@ -111,7 +121,44 @@ export function applyEvent(state: DocState, event: Event): DocState {
             after: thread.state,
         });
     }
+    if (settled && revivesDoc(state, event, wasResolved)) {
+        state.verdict = { state: "open", seq: event.seq, at: event.at };
+    }
     return state;
+}
+
+/**
+ * Whether the user's `event`, already folded in, is thread activity that puts an approved or
+ * dropped doc back to open. A verdict is never one, so the threads it closes cannot reopen it.
+ * `wasResolved`: the event's thread was resolved before it.
+ */
+function revivesDoc(state: DocState, event: Event, wasResolved: boolean): boolean {
+    switch (event.type) {
+        case "comment":
+        case "finish":
+            return true;
+        case "reply":
+        case "suggest":
+        case "reopen":
+            return state.threads.has(event.id);
+        case "reject":
+            return Boolean(event.note) && state.threads.has(event.id);
+        case "undelete": {
+            const thread = state.threads.get(event.id);
+            return thread !== undefined && isUnresolved(thread);
+        }
+        case "retract": {
+            const thread = state.threads.get(event.id);
+            return (
+                wasResolved &&
+                thread !== undefined &&
+                isUnresolved(thread) &&
+                !state.deleted.has(thread.id)
+            );
+        }
+        default:
+            return false;
+    }
 }
 
 /**
@@ -325,6 +372,46 @@ function applyEventBody(state: DocState, event: Event): void {
                 }
             }
             break;
+        case "verdict": {
+            const closed = new Set(event.closed);
+            for (const id of closed) {
+                const thread = state.threads.get(id);
+                if (!thread || !isUnresolved(thread)) {
+                    continue;
+                }
+                thread.lastActivity = event.at;
+                thread.state = "resolved";
+                if (thread.suggestion?.status === "pending") {
+                    thread.suggestion.status = "rejected";
+                }
+            }
+            // A retract of an older event must not bring a closed thread back behind the verdict.
+            for (const [seq, record] of state.retractable) {
+                if (closed.has(record.id)) {
+                    state.retractable.delete(seq);
+                }
+            }
+            state.verdict = {
+                state: event.state,
+                seq: event.seq,
+                at: event.at,
+                hash: event.hash,
+                ...(event.note ? { note: event.note } : {}),
+                ...(event.closed?.length ? { closed: event.closed } : {}),
+            };
+            delete state.finish;
+            break;
+        }
+        case "finish":
+            for (const id of event.ids) {
+                const thread = state.threads.get(id);
+                if (thread && isUnresolved(thread)) {
+                    thread.lastActivity = event.at;
+                    thread.state = "open";
+                }
+            }
+            state.finish = { seq: event.seq, at: event.at, ids: event.ids };
+            break;
     }
 }
 
@@ -372,6 +459,24 @@ export function withoutDeleted(state: DocState): DocState {
 /** Threads `pending` returns: sent and waiting on the agent, claimed or not. */
 export function needsAgent(thread: Thread): boolean {
     return thread.state === "open" || thread.state === "working";
+}
+
+/** The threads that stand between the doc and an approval: unresolved and not deleted. */
+export function unresolvedThreads(state: DocState): Thread[] {
+    return [...state.threads.values()].filter(
+        (thread) => isUnresolved(thread) && !state.deleted.has(thread.id),
+    );
+}
+
+/**
+ * The threads of the finish request the agent has yet to settle. Empty when the request is done
+ * or there is none: a finish request is outstanding exactly while this is not empty.
+ */
+export function finishRemaining(state: DocState): ThreadId[] {
+    const ids = new Set(state.finish?.ids);
+    return unresolvedThreads(state)
+        .filter((thread) => ids.has(thread.id))
+        .map((thread) => thread.id);
 }
 
 export function isStalled(thread: Thread, now: Date | number = Date.now()): boolean {

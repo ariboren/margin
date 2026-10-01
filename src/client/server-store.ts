@@ -6,12 +6,15 @@ import type {
     DocSettingKey,
     DocSnapshot,
     DocStore,
+    FinishResult,
     IsoTime,
     Offset,
     ParsedDoc,
     SaveResult,
     StoreStatus,
     ThreadId,
+    VerdictResult,
+    VerdictState,
 } from "../core/model.ts";
 import {
     DEV_EVENT,
@@ -303,6 +306,18 @@ export class ServerStore implements DocStore {
         await this.call("setting", { key, value });
     }
 
+    async setVerdict(input: {
+        state: VerdictState;
+        note?: string;
+        asIs?: boolean;
+    }): Promise<VerdictResult & Partial<Seq>> {
+        return unversioned(await this.call("verdict", input));
+    }
+
+    async requestFinish(): Promise<FinishResult & Partial<Seq>> {
+        return unversioned(await this.call("finish", {}));
+    }
+
     /** Per viewer: the banner stays dismissed for this outside change, across reloads. */
     dismissChangedOnDisk(): void {
         this.dismissed = this.wire.changedOnDisk ?? null;
@@ -392,6 +407,8 @@ export class ServerStore implements DocStore {
             missing: wire.missing,
             version: wire.version,
             agents: wire.agents,
+            verdict: wire.verdict,
+            finish: wire.finish,
         };
     }
 

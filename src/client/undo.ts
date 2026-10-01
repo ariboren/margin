@@ -527,6 +527,8 @@ export function recording(host: DocStore, stack: UndoStack): DocStore {
         setHold: (on) => host.setHold(on),
         sendAll: () => host.sendAll(),
         setSetting: (key, value) => host.setSetting(key, value),
+        setVerdict: (input) => host.setVerdict(input),
+        requestFinish: () => host.requestFinish(),
         dismissChangedOnDisk: () => host.dismissChangedOnDisk(),
         ...statusOf(host),
     };

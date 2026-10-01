@@ -1,23 +1,29 @@
-import type {
-    Anchor,
-    Author,
-    DocSettingKey,
-    DocSettings,
-    DocSnapshot,
-    DocStore,
-    EditCause,
-    EditEvent,
-    Offset,
-    ParsedDoc,
-    Range,
-    SaveResult,
-    SourceSplice,
-    Thread,
-    ThreadId,
-    ThreadState,
-    WakeReason,
+import {
+    isUnresolved,
+    type Anchor,
+    type Author,
+    type DocSettingKey,
+    type DocSettings,
+    type DocSnapshot,
+    type DocStore,
+    type DocVerdict,
+    type EditCause,
+    type EditEvent,
+    type FinishRequest,
+    type FinishResult,
+    type Offset,
+    type ParsedDoc,
+    type Range,
+    type SaveResult,
+    type SourceSplice,
+    type Thread,
+    type ThreadId,
+    type ThreadState,
+    type VerdictResult,
+    type VerdictState,
+    type WakeReason,
 } from "../src/core/model.ts";
-import { parseDoc, spliceEdit, unitAt } from "../src/core/blocks.ts";
+import { hashText, parseDoc, spliceEdit, unitAt } from "../src/core/blocks.ts";
 import { createAnchor, rebaseAnchor, resolveAnchor } from "../src/core/anchor.ts";
 import { editRange } from "../src/client/view-model.ts";
 
@@ -37,6 +43,9 @@ export interface Wake {
     id: ThreadId;
     reason: WakeReason;
 }
+
+/** The reasons about the doc as a whole, which name no thread. */
+export type DocWake = Extract<WakeReason, "approved" | "dropped" | "reopened">;
 
 /** A thread placed at load time, in the source as it was before any seeded edit. */
 export interface SeedThread {
@@ -72,10 +81,15 @@ export class MemoryStore implements DocStore {
     private nextId = 1;
     private agentSeenAt?: string;
     private changedOnDisk?: string;
+    private verdict?: DocVerdict;
+    private finish?: FinishRequest;
+    private docWake?: DocWake;
     private readonly listeners = new Set<(snapshot: DocSnapshot) => void>();
     private cached: DocSnapshot;
     /** The scripted agent's inbox; the real daemon wakes `margin watch` instead. */
     onWake?: (batch: Wake[]) => void;
+    /** A verdict, or the doc going back to open; the real daemon wakes `margin watch` with it. */
+    onVerdict?: (reason: DocWake) => void;
 
     constructor(
         private readonly path: string,
@@ -100,6 +114,7 @@ export class MemoryStore implements DocStore {
 
     async comment(input: { anchor?: Anchor; text: string }): Promise<ThreadId> {
         const thread = this.open(input.anchor, "user", input.text);
+        this.reviveDoc();
         this.emit();
         this.wakeIfOpen([thread], "new");
         return thread.id;
@@ -113,6 +128,7 @@ export class MemoryStore implements DocStore {
             replace: input.replace,
             status: "pending",
         };
+        this.reviveDoc();
         this.emit();
         this.wakeIfOpen([thread], "new");
         return thread.id;
@@ -124,6 +140,7 @@ export class MemoryStore implements DocStore {
         if (thread.state !== "draft") {
             thread.state = "open";
         }
+        this.reviveDoc();
         this.emit();
         this.wakeIfOpen([thread], "reply");
     }
@@ -152,6 +169,7 @@ export class MemoryStore implements DocStore {
         if (note) {
             this.message(thread, "user", note);
             this.setState(thread, "open");
+            this.reviveDoc();
         } else {
             this.setState(thread, "resolved");
         }
@@ -168,6 +186,7 @@ export class MemoryStore implements DocStore {
 
     async reopen(id: ThreadId): Promise<void> {
         this.setState(this.thread(id), "open");
+        this.reviveDoc();
         this.emit();
     }
 
@@ -179,9 +198,12 @@ export class MemoryStore implements DocStore {
     }
 
     async undeleteThread(id: ThreadId): Promise<void> {
-        this.thread(id);
+        const thread = this.thread(id);
         this.deleted.delete(id);
         this.tick();
+        if (isUnresolved(thread)) {
+            this.reviveDoc();
+        }
         this.emit();
     }
 
@@ -228,6 +250,7 @@ export class MemoryStore implements DocStore {
                 : { exact: edit?.after ?? "", prefix: "", suffix: "", hint: edit?.start ?? 0 };
         const thread = this.open(anchor, "user", text);
         thread.followsEdit = editSeq;
+        this.reviveDoc();
         this.emit();
         this.wakeIfOpen([thread], "new");
         return thread.id;
@@ -252,6 +275,72 @@ export class MemoryStore implements DocStore {
         this.settings[key] = value;
         this.tick();
         this.emit();
+    }
+
+    async setVerdict(input: {
+        state: VerdictState;
+        note?: string;
+        asIs?: boolean;
+    }): Promise<VerdictResult> {
+        const { state, note } = input;
+        if (state === "open" && (this.verdict?.state ?? "open") === "open") {
+            return { ok: true };
+        }
+        const unresolved = state === "approved" ? this.unresolved() : [];
+        const ids = unresolved.map((thread) => thread.id);
+        if (unresolved.length > 0 && !input.asIs) {
+            return { ok: false, reason: "unresolved", ids };
+        }
+        const at = this.isoNow();
+        for (const thread of unresolved) {
+            thread.state = "resolved";
+            thread.lastActivity = at;
+            if (thread.suggestion?.status === "pending") {
+                thread.suggestion.status = "rejected";
+            }
+        }
+        this.verdict = {
+            state,
+            seq: this.tick(),
+            at,
+            hash: hashText(this.source),
+            ...(note ? { note } : {}),
+            ...(ids.length > 0 ? { closed: ids } : {}),
+        };
+        this.finish = undefined;
+        this.docWake = state === "open" ? "reopened" : state;
+        this.emit();
+        return { ok: true };
+    }
+
+    async requestFinish(): Promise<FinishResult> {
+        const unapplied: ThreadId[] = [];
+        for (const thread of this.unresolved()) {
+            const suggestion = thread.suggestion;
+            if (suggestion?.by !== "agent" || suggestion.status !== "pending") {
+                continue;
+            }
+            if (this.replaceAnchored(thread, suggestion.replace, "accept", "user").ok) {
+                suggestion.status = "accepted";
+                this.setState(thread, "resolved");
+            } else {
+                unapplied.push(thread.id);
+            }
+        }
+        const handed = this.unresolved();
+        const ids = handed.map((thread) => thread.id);
+        if (handed.length > 0) {
+            for (const thread of handed) {
+                this.setState(thread, "open");
+            }
+            this.finish = { seq: this.tick(), at: this.isoNow(), ids };
+            this.reviveDoc();
+        }
+        this.emit();
+        if (handed.length > 0) {
+            this.onWake?.(ids.map((id) => ({ id, reason: "finish" })));
+        }
+        return { ids, unapplied };
     }
 
     dismissChangedOnDisk(): void {
@@ -299,6 +388,15 @@ export class MemoryStore implements DocStore {
             this.message(thread, "agent", options.note);
         }
         this.setState(thread, "replied");
+        this.emit();
+    }
+
+    /** `margin resolve`, or the `--resolve` of a reply: how the agent settles a finish request. */
+    agentResolve(id: ThreadId): void {
+        if (this.deleted.has(id)) {
+            return;
+        }
+        this.setState(this.thread(id), "resolved");
         this.emit();
     }
 
@@ -404,6 +502,18 @@ export class MemoryStore implements DocStore {
 
     private live(): Thread[] {
         return [...this.threads.values()].filter((thread) => !this.deleted.has(thread.id));
+    }
+
+    private unresolved(): Thread[] {
+        return this.live().filter(isUnresolved);
+    }
+
+    /** The user's own thread activity puts an approved or dropped doc back to open. */
+    private reviveDoc(): void {
+        if (this.verdict && this.verdict.state !== "open") {
+            this.verdict = { state: "open", seq: this.seq, at: this.isoNow() };
+            this.docWake = "reopened";
+        }
     }
 
     private thread(id: ThreadId): Thread {
@@ -529,6 +639,11 @@ export class MemoryStore implements DocStore {
         for (const listener of this.listeners) {
             listener(this.cached);
         }
+        const wake = this.docWake;
+        this.docWake = undefined;
+        if (wake) {
+            this.onVerdict?.(wake);
+        }
     }
 
     private build(): DocSnapshot {
@@ -549,6 +664,8 @@ export class MemoryStore implements DocStore {
             changedOnDisk: this.changedOnDisk,
             missing: false,
             version: this.seq,
+            ...(this.verdict ? { verdict: { ...this.verdict } } : {}),
+            ...(this.finish ? { finish: { ...this.finish } } : {}),
         };
     }
 }

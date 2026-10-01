@@ -134,6 +134,8 @@ function host(options: { retract?: boolean } = {}): Host {
         setHold: async () => {},
         sendAll: async () => {},
         setSetting: async () => {},
+        setVerdict: async () => ({ ok: true }),
+        requestFinish: async () => ({ ids: [], unapplied: [] }),
         dismissChangedOnDisk: () => {},
     };
     if (retract) {

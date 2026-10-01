@@ -10,6 +10,7 @@ import { hashText } from "./blocks.ts";
 import { readLog } from "./log.ts";
 import {
     isDocNote,
+    isUnresolved,
     type AgentIdentity,
     type Anchor,
     type Event,
@@ -30,11 +31,13 @@ import {
     STALL_MS,
     catchUpInputs,
     createThread,
+    finishRemaining,
     foldLog,
     isStalled,
     needsAgent,
     nextThreadId,
     reanchorInput,
+    unresolvedThreads,
     withoutDeleted,
     type DocState,
 } from "./threads.ts";
@@ -945,5 +948,306 @@ describe("doc notes", () => {
         expect(needsAgent(thread(foldLog(events.slice(0, 2))))).toBe(true);
         expect(withoutDeleted(foldLog(events.slice(0, 5))).threads.has("c1")).toBe(false);
         expect(thread(foldLog(events)).anchor).toBeUndefined();
+    });
+});
+
+describe("doc verdict", () => {
+    const approve = (closed?: ThreadId[]): EventInput => ({
+        type: "verdict",
+        by: "user",
+        state: "approved",
+        hash: "h1",
+        ...(closed ? { closed } : {}),
+    });
+    const drop: EventInput = { type: "verdict", by: "user", state: "dropped", hash: "h1" };
+    const resolved: EventInput = { type: "resolve", by: "user", id: "c1" };
+    const pendingSuggestion: EventInput = {
+        type: "suggest",
+        by: "agent",
+        id: "c2",
+        replace: "better words",
+        apply: false,
+    };
+
+    test("a doc with no verdict is open; a verdict records its seq, time, hash and note", () => {
+        expect(foldLog(log(comment("c1"))).verdict).toBeUndefined();
+        const events = log(comment("c1"), resolved, {
+            type: "verdict",
+            by: "user",
+            state: "approved",
+            hash: "h1",
+            note: "Ship it",
+        });
+        expect(foldLog(events).verdict).toEqual({
+            state: "approved",
+            seq: 3,
+            at: events[2]!.at,
+            hash: "h1",
+            note: "Ship it",
+        });
+    });
+
+    test("any state follows any other, and the later verdict replaces the note and hash", () => {
+        const state = foldLog(
+            log(
+                { type: "verdict", by: "user", state: "dropped", hash: "h1", note: "No" },
+                { type: "verdict", by: "user", state: "approved", hash: "h2" },
+                { type: "verdict", by: "user", state: "open", hash: "h3" },
+            ),
+        );
+        expect(state.verdict).toMatchObject({ state: "open", seq: 3, hash: "h3" });
+        expect(state.verdict?.note).toBeUndefined();
+    });
+
+    test("approve as is resolves the closed threads and rejects a pending suggestion", () => {
+        const events = log(
+            comment("c1"),
+            comment("c2"),
+            comment("c3", true),
+            pendingSuggestion,
+            approve(["c1", "c2", "c3"]),
+        );
+        const state = foldLog(events);
+        expect([...state.threads.values()].map((thread) => thread.state)).toEqual([
+            "resolved",
+            "resolved",
+            "resolved",
+        ]);
+        expect(thread(state, "c2").suggestion?.status).toBe("rejected");
+        expect(thread(state, "c1").lastActivity).toBe(events[4]!.at);
+        expect(state.verdict).toMatchObject({ state: "approved", closed: ["c1", "c2", "c3"] });
+        expect(unresolvedThreads(state)).toEqual([]);
+    });
+
+    test("the verdict's own closing neither reopens the doc nor leaves a thread to wake on", () => {
+        const state = foldLog(log(comment("c1"), drop, approve(["c1"])));
+        expect(state.verdict).toMatchObject({ state: "approved", seq: 3 });
+        expect([...state.threads.values()].some(needsAgent)).toBe(false);
+    });
+
+    test("a closed thread already resolved keeps its time and its accepted suggestion", () => {
+        const events = log(
+            comment("c1"),
+            comment("c2"),
+            pendingSuggestion,
+            { type: "accept", by: "user", id: "c2" },
+            approve(["c1", "c2", "c9"]),
+        );
+        const state = foldLog(events);
+        expect(thread(state, "c2").suggestion?.status).toBe("accepted");
+        expect(thread(state, "c2").lastActivity).toBe(events[3]!.at);
+    });
+
+    test("closing is not retractable, and an older retract cannot revive a closed thread", () => {
+        const userReply: EventInput = { type: "reply", by: "user", id: "c1", text: "Hm" };
+        const agentReply: EventInput = { type: "reply", by: "agent", id: "c1", text: "Done" };
+        const events = log(comment("c1"), agentReply, userReply, approve(["c1"]), {
+            type: "retract",
+            by: "user",
+            id: "c1",
+            of: 3,
+        });
+        expect(foldLog(events.slice(0, 3)).retractable.has(3)).toBe(true);
+        expect(foldLog(events.slice(0, 4)).retractable.size).toBe(0);
+        const after = foldLog(events);
+        expect(thread(after).state).toBe("resolved");
+        expect(thread(after).messages).toHaveLength(3);
+        expect(after.verdict?.state).toBe("approved");
+    });
+
+    test("a thread the verdict did not close stays retractable", () => {
+        const state = foldLog(log(comment("c1"), comment("c2"), resolved, approve(["c2"])));
+        expect([...state.retractable.keys()]).toEqual([3]);
+    });
+
+    describe("auto-reopen", () => {
+        const base = [comment("c1"), resolved, approve()];
+        const reopening: [string, EventInput[], EventInput][] = [
+            ["a comment", base, comment("c2")],
+            ["a held draft", base, comment("c2", true)],
+            ["a reply", base, { type: "reply", by: "user", id: "c1", text: "One more" }],
+            [
+                "a suggestion",
+                base,
+                { type: "suggest", by: "user", id: "c2", anchor, replace: "new", apply: false },
+            ],
+            [
+                "a reject with a note",
+                base,
+                { type: "reject", by: "user", id: "c1", note: "Try again" },
+            ],
+            ["a thread reopened", base, { type: "reopen", by: "user", id: "c1" }],
+            [
+                "an unresolved thread undeleted",
+                [comment("c1"), { type: "delete", by: "user", id: "c1" }, approve()],
+                { type: "undelete", by: "user", id: "c1" },
+            ],
+            [
+                "a retract that revives a thread",
+                base,
+                { type: "retract", by: "user", id: "c1", of: 2 },
+            ],
+            [
+                "a finish request",
+                [comment("c1"), drop],
+                { type: "finish", by: "user", ids: ["c1"] },
+            ],
+        ];
+        for (const [name, before, trigger] of reopening) {
+            test(`${name} by the user reopens an approved or dropped doc`, () => {
+                const events = log(...before, trigger);
+                const state = foldLog(events);
+                const last = events.at(-1)!;
+                expect(state.verdict).toEqual({ state: "open", seq: last.seq, at: last.at });
+            });
+        }
+
+        const quiet: [string, EventInput[], EventInput][] = [
+            ["an agent reply", base, { type: "reply", by: "agent", id: "c1", text: "Done" }],
+            [
+                "an agent thread",
+                base,
+                { type: "suggest", by: "agent", id: "c2", anchor, replace: "new", apply: false },
+            ],
+            ["a plain reject", base, { type: "reject", by: "user", id: "c1" }],
+            ["a resolve", [comment("c1"), drop], resolved],
+            ["a delete", [comment("c1"), drop], { type: "delete", by: "user", id: "c1" }],
+            [
+                "a resolved thread undeleted",
+                [comment("c1"), resolved, { type: "delete", by: "user", id: "c1" }, approve()],
+                { type: "undelete", by: "user", id: "c1" },
+            ],
+            [
+                "a retract that revives nothing",
+                [comment("c1"), { type: "reply", by: "user", id: "c1", text: "Hm" }, drop],
+                { type: "retract", by: "user", id: "c1", of: 2 },
+            ],
+            [
+                "a retract of an unknown seq",
+                base,
+                { type: "retract", by: "user", id: "c1", of: 99 },
+            ],
+            [
+                "a reply to an unknown thread",
+                base,
+                { type: "reply", by: "user", id: "c9", text: "?" },
+            ],
+            [
+                "an edit",
+                base,
+                {
+                    type: "edit",
+                    by: "user",
+                    cause: "user",
+                    start: 0,
+                    before: "a",
+                    after: "b",
+                    line: 1,
+                    headingPath: [],
+                },
+            ],
+            ["a hold", base, { type: "hold", by: "user", on: true }],
+        ];
+        for (const [name, before, event] of quiet) {
+            test(`${name} leaves the verdict standing`, () => {
+                const settled = foldLog(log(...before)).verdict;
+                expect(settled?.state).not.toBe("open");
+                expect(foldLog(log(...before, event)).verdict).toEqual(settled!);
+            });
+        }
+
+        test("activity on an open doc leaves it without a verdict", () => {
+            expect(foldLog(log(comment("c1"), comment("c2"))).verdict).toBeUndefined();
+            const reopened = foldLog(
+                log(comment("c1"), drop, comment("c2"), comment("c3")),
+            ).verdict;
+            expect(reopened).toMatchObject({ state: "open", seq: 3 });
+        });
+    });
+
+    describe("finish", () => {
+        const finish = (...ids: ThreadId[]): EventInput => ({ type: "finish", by: "user", ids });
+
+        test("hands drafts, replied and working threads to the agent as open", () => {
+            const events = log(
+                comment("c1", true),
+                comment("c2"),
+                comment("c3"),
+                comment("c4"),
+                { type: "claim", by: "agent", ids: ["c2", "c3"] },
+                { type: "reply", by: "agent", id: "c3", text: "Done" },
+                { type: "resolve", by: "user", id: "c4" },
+                finish("c1", "c2", "c3", "c4"),
+            );
+            const state = foldLog(events);
+            expect([...state.threads.values()].map((thread) => thread.state)).toEqual([
+                "open",
+                "open",
+                "open",
+                "resolved",
+            ]);
+            expect(thread(state, "c3").claimed).toBe(true);
+            expect(state.finish).toEqual({
+                seq: 8,
+                at: events[7]!.at,
+                ids: ["c1", "c2", "c3", "c4"],
+            });
+            expect(finishRemaining(state)).toEqual(["c1", "c2", "c3"]);
+            expect(state.verdict).toBeUndefined();
+        });
+
+        test("is outstanding until every thread is resolved or deleted", () => {
+            const base = [comment("c1"), comment("c2"), finish("c1", "c2")];
+            expect(finishRemaining(foldLog(log(...base)))).toEqual(["c1", "c2"]);
+            const one = foldLog(log(...base, { type: "resolve", by: "agent", id: "c1" }));
+            expect(finishRemaining(one)).toEqual(["c2"]);
+            const done = foldLog(
+                log(
+                    ...base,
+                    { type: "resolve", by: "agent", id: "c1" },
+                    { type: "delete", by: "user", id: "c2" },
+                ),
+            );
+            expect(finishRemaining(done)).toEqual([]);
+            expect(done.finish?.ids).toEqual(["c1", "c2"]);
+        });
+
+        test("a thread outside the request is not part of what remains", () => {
+            const state = foldLog(log(comment("c1"), finish("c1"), comment("c2")));
+            expect(finishRemaining(state)).toEqual(["c1"]);
+            expect(finishRemaining(foldLog(log(comment("c1"))))).toEqual([]);
+        });
+
+        test("any verdict clears the request", () => {
+            const state = foldLog(log(comment("c1"), finish("c1"), drop));
+            expect(state.finish).toBeUndefined();
+            expect(finishRemaining(state)).toEqual([]);
+            expect(thread(state).state).toBe("open");
+        });
+    });
+
+    test("unresolved means every state but resolved, deleted threads left out", () => {
+        const state = foldLog(
+            log(
+                comment("c1", true),
+                comment("c2"),
+                comment("c3"),
+                comment("c4"),
+                comment("c5"),
+                comment("c6"),
+                { type: "claim", by: "agent", ids: ["c3"] },
+                { type: "reply", by: "agent", id: "c4", text: "Done" },
+                { type: "resolve", by: "user", id: "c5" },
+                { type: "delete", by: "user", id: "c6" },
+            ),
+        );
+        expect(unresolvedThreads(state).map((thread) => [thread.id, thread.state])).toEqual([
+            ["c1", "draft"],
+            ["c2", "open"],
+            ["c3", "working"],
+            ["c4", "replied"],
+        ]);
+        expect(isUnresolved(thread(state, "c5"))).toBe(false);
+        expect(isUnresolved(thread(state, "c6"))).toBe(true);
     });
 });
