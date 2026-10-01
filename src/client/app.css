@@ -2406,6 +2406,12 @@
         opacity: 0.6;
     }
 
+    /* A card can be as narrow as 281px inside (the threads drawer on a phone), and its buttons
+       lead with an icon. */
+    .card .button {
+        padding-inline: 8px;
+    }
+
     .button-quiet {
         background: transparent;
         color: var(--ink-soft);

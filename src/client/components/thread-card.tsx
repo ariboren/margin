@@ -1,6 +1,13 @@
 import type { JSX } from "preact";
 import { useMemo, useRef, useState } from "preact/hooks";
-import type { DocStore, Message, Suggestion, Thread, ThreadId } from "../../core/model.ts";
+import type {
+    DocStore,
+    Message,
+    Suggestion,
+    Thread,
+    ThreadId,
+    ThreadState,
+} from "../../core/model.ts";
 import { recall, remember } from "../storage.ts";
 import { relativeTime } from "../time.ts";
 import type { ApplyControls } from "../use-apply.ts";
@@ -10,6 +17,7 @@ import { needsDeleteConfirm, threadStatus, type ThreadStatus } from "../view-mod
 import { agentTipLine } from "./agent-chip.tsx";
 import { AgentMark } from "./agent-marks.tsx";
 import { CardHead } from "./card-head.tsx";
+import { Icon, type IconName } from "./icons.tsx";
 import { authorLabel, suggestionLabel, summarize } from "./thread-summary.ts";
 import { Tooltip } from "./tooltip.tsx";
 
@@ -203,20 +211,14 @@ function Body({
                 <div class="suggestion-box">
                     <span class="suggestion-label">{suggestionLabel(pending.by)}</span>
                     <span class="suggestion-actions">
-                        <button
-                            type="button"
-                            class="button button-accept"
+                        <ActionButton
+                            action={suggestionActions.accept}
                             onClick={() => apply.accept(thread)}
-                        >
-                            Accept <kbd>a</kbd>
-                        </button>
-                        <button
-                            type="button"
-                            class="button button-quiet"
+                        />
+                        <ActionButton
+                            action={suggestionActions.reject}
                             onClick={() => void store.reject(thread.id)}
-                        >
-                            Reject <kbd>r</kbd>
-                        </button>
+                        />
                     </span>
                 </div>
             ) : null}
@@ -231,13 +233,7 @@ function Body({
                         {thread.applied.reverted ? "Agent edit reverted" : "Changed by agent"}
                     </span>
                     {thread.applied.reverted ? null : (
-                        <button
-                            type="button"
-                            class="button button-quiet"
-                            onClick={() => apply.revert(thread)}
-                        >
-                            Revert
-                        </button>
+                        <ActionButton action={revertAction} onClick={() => apply.revert(thread)} />
                     )}
                 </div>
             ) : null}
@@ -327,48 +323,39 @@ function CardActions({ store, thread, hold, pending }: CardActionsProps): JSX.El
     const keepFocus = (event: MouseEvent) => event.preventDefault();
     const remove = () => void store.deleteThread(thread.id);
     const requestDelete = () => (needsDeleteConfirm(thread) ? setConfirming(true) : remove());
-    const deleteButton = (
-        <button
-            type="button"
-            class="button button-quiet"
-            onMouseDown={keepFocus}
-            onClick={requestDelete}
-        >
-            Delete
-        </button>
-    );
+    const row = cardRow({
+        state: thread.state,
+        hold,
+        pending,
+        hasText: text.trim() !== "",
+        confirming,
+    });
+    const controls: Record<RowActionId, ButtonControls> = {
+        delete: { onClick: requestDelete, onMouseDown: keepFocus },
+        cancel: { onClick: () => setConfirming(false) },
+        confirmDelete: { onClick: remove },
+        reopen: { onClick: () => void store.reopen(thread.id) },
+        resolve: { onClick: () => void store.resolve(thread.id) },
+        rejectWithNote: {
+            onClick: () => void submit(async (note) => await store.reject(thread.id, note)),
+            onMouseDown: keepFocus,
+            disabled: sending,
+        },
+        send: { onClick: send, onMouseDown: keepFocus, disabled: !text.trim() || sending },
+    };
+    const buttons = row.map((action) => (
+        <ActionButton key={action.id} action={action} {...controls[action.id]} />
+    ));
     if (confirming) {
         return (
             <div class="card-confirm" role="group" aria-label="Confirm delete">
                 <span>Delete this thread?</span>
-                <span class="card-actions-end">
-                    <button
-                        type="button"
-                        class="button button-quiet"
-                        onClick={() => setConfirming(false)}
-                    >
-                        Cancel
-                    </button>
-                    <button type="button" class="button button-danger" onClick={remove}>
-                        Delete
-                    </button>
-                </span>
+                <span class="card-actions-end">{buttons}</span>
             </div>
         );
     }
     if (thread.state === "resolved") {
-        return (
-            <div class="card-actions">
-                {deleteButton}
-                <button
-                    type="button"
-                    class="button button-quiet"
-                    onClick={() => void store.reopen(thread.id)}
-                >
-                    Reopen
-                </button>
-            </div>
-        );
+        return <div class="card-actions">{buttons}</div>;
     }
     return (
         <div class="card-reply">
@@ -385,40 +372,113 @@ function CardActions({ store, thread, hold, pending }: CardActionsProps): JSX.El
                 onKeyDown={submitKeys(send, () => input.current?.blur())}
             />
             <div class="card-actions">
-                <span class="card-actions-end">
-                    {deleteButton}
-                    {pending && text.trim() ? (
-                        <button
-                            type="button"
-                            class="button button-quiet"
-                            disabled={sending}
-                            onMouseDown={keepFocus}
-                            onClick={() =>
-                                void submit(async (note) => await store.reject(thread.id, note))
-                            }
-                        >
-                            Reject with note
-                        </button>
-                    ) : (
-                        <button
-                            type="button"
-                            class="button button-quiet"
-                            onClick={() => void store.resolve(thread.id)}
-                        >
-                            Resolve
-                        </button>
-                    )}
-                    <button
-                        type="button"
-                        class="button"
-                        disabled={!text.trim() || sending}
-                        onMouseDown={keepFocus}
-                        onClick={send}
-                    >
-                        {hold && thread.state === "draft" ? "Add" : "Reply"}
-                    </button>
-                </span>
+                <span class="card-actions-end">{buttons}</span>
             </div>
         </div>
+    );
+}
+
+/**
+ * How a button reads at a glance. Three looks fill the button (primary, accept, danger) and a row
+ * holds one of those at most; the rest are outlines.
+ */
+export type ActionLook =
+    "primary" | "accept" | "accept-quiet" | "danger" | "danger-quiet" | "danger-soft" | "neutral";
+
+const lookClass: Record<ActionLook, string> = {
+    primary: "button",
+    accept: "button button-accept",
+    "accept-quiet": "button button-accept-quiet",
+    danger: "button button-danger",
+    "danger-quiet": "button button-danger-quiet",
+    "danger-soft": "button button-quiet button-danger-soft",
+    neutral: "button button-quiet",
+};
+
+export function isFilled(look: ActionLook): boolean {
+    return look === "primary" || look === "accept" || look === "danger";
+}
+
+export interface CardAction<Id extends string = string> {
+    id: Id;
+    label: string;
+    icon?: IconName;
+    look: ActionLook;
+    /** The shortcut shown in the button. */
+    key?: string;
+}
+
+/** Accept leads, as Approve does in the review control, and Reject is its Decline. */
+export const suggestionActions = {
+    accept: { id: "accept", label: "Accept", icon: "check", look: "accept", key: "a" },
+    reject: { id: "reject", label: "Reject", icon: "slash", look: "danger-quiet", key: "r" },
+} satisfies Record<string, CardAction>;
+
+export const revertAction: CardAction = {
+    id: "revert",
+    label: "Revert",
+    icon: "undo",
+    look: "neutral",
+};
+
+export type RowActionId =
+    "delete" | "cancel" | "confirmDelete" | "reopen" | "resolve" | "rejectWithNote" | "send";
+
+export interface CardRowState {
+    state: ThreadState;
+    /** Comments are held, so a draft's button adds to it instead of sending. */
+    hold: boolean;
+    /** The thread has a pending suggestion. */
+    pending: boolean;
+    hasText: boolean;
+    confirming: boolean;
+}
+
+/** The buttons under a card, in the order they show. */
+export function cardRow(row: CardRowState): CardAction<RowActionId>[] {
+    if (row.confirming) {
+        return [
+            { id: "cancel", label: "Cancel", look: "neutral" },
+            { id: "confirmDelete", label: "Delete", icon: "trash", look: "danger" },
+        ];
+    }
+    // Soft, not outlined in red: every open card shows it, and a confirm or an undo follows.
+    const remove: CardAction<RowActionId> = {
+        id: "delete",
+        label: "Delete",
+        icon: "trash",
+        look: "danger-soft",
+    };
+    if (row.state === "resolved") {
+        return [remove, { id: "reopen", label: "Reopen", icon: "reopen", look: "neutral" }];
+    }
+    // "Reject with note" goes without an icon: with one, the row is wider than the narrowest card.
+    return [
+        remove,
+        row.pending && row.hasText
+            ? { id: "rejectWithNote", label: "Reject with note", look: "danger-quiet" }
+            : { id: "resolve", label: "Resolve", icon: "check", look: "accept-quiet" },
+        row.hold && row.state === "draft"
+            ? { id: "send", label: "Add", icon: "plus", look: "primary" }
+            : { id: "send", label: "Reply", icon: "send", look: "primary" },
+    ];
+}
+
+interface ButtonControls {
+    onClick: () => void;
+    onMouseDown?: (event: MouseEvent) => void;
+    disabled?: boolean;
+}
+
+function ActionButton({
+    action,
+    ...controls
+}: { action: CardAction } & ButtonControls): JSX.Element {
+    return (
+        <button type="button" class={lookClass[action.look]} {...controls}>
+            {action.icon ? <Icon name={action.icon} /> : null}
+            {action.label}
+            {action.key ? <kbd>{action.key}</kbd> : null}
+        </button>
     );
 }
