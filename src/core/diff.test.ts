@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { byteLength, formatEdit, pendingEdit, wordHunks } from "./diff.ts";
+import type { EditEvent } from "./model.ts";
+import { byteLength, formatEdit, hunkPieces, netEdits, pendingEdit, wordHunks } from "./diff.ts";
 
 function words(count: number, from = 0): string {
     return Array.from({ length: count }, (_, i) => `w${from + i}`).join(" ");
@@ -75,6 +76,40 @@ describe("wordHunks", () => {
     });
 });
 
+describe("hunkPieces", () => {
+    test("gives each hunk its pieces and which sides were cut, unescaped", () => {
+        const before = `${words(20)}\nmore`;
+        const after = before.replace("w10", "changed");
+        expect(hunkPieces(before, after)).toEqual([
+            {
+                pieces: [
+                    { kind: "same", text: "w6" },
+                    { kind: "same", text: " " },
+                    { kind: "same", text: "w7" },
+                    { kind: "same", text: " " },
+                    { kind: "same", text: "w8" },
+                    { kind: "same", text: " " },
+                    { kind: "same", text: "w9" },
+                    { kind: "same", text: " " },
+                    { kind: "del", text: "w10" },
+                    { kind: "ins", text: "changed" },
+                    { kind: "same", text: " " },
+                    { kind: "same", text: "w11" },
+                    { kind: "same", text: " " },
+                    { kind: "same", text: "w12" },
+                    { kind: "same", text: " " },
+                    { kind: "same", text: "w13" },
+                    { kind: "same", text: " " },
+                    { kind: "same", text: "w14" },
+                ],
+                cutBefore: true,
+                cutAfter: true,
+            },
+        ]);
+        expect(hunkPieces("a\nb", "a\nc")[0]!.pieces).toContainEqual({ kind: "same", text: "\n" });
+    });
+});
+
 describe("pendingEdit", () => {
     test("a 3-word change in a 1,600-char paragraph renders under 200 B", () => {
         const before = paragraph(1600);
@@ -107,5 +142,55 @@ describe("pendingEdit", () => {
             `  ${edit.hunks[0]}`,
             `  ${edit.hunks[1]}`,
         ]);
+    });
+});
+
+describe("netEdits", () => {
+    const edit = (seq: number, of?: number, by: "user" | "agent" = "user"): EditEvent => ({
+        seq,
+        at: new Date(Date.UTC(2026, 8, 30, 12, 0, seq)).toISOString(),
+        by,
+        type: "edit",
+        cause: of === undefined ? (by === "user" ? "user" : "apply") : "undo",
+        ...(of === undefined ? {} : { of }),
+        start: 0,
+        before: seq % 2 ? "a" : "b",
+        after: seq % 2 ? "b" : "a",
+        line: 1,
+        headingPath: [],
+    });
+    const E = edit(2);
+    const U = edit(4, 2);
+    const R = edit(6, 4);
+    const seqs = (edits: EditEvent[], cursor?: number) => netEdits(edits, cursor).map((e) => e.seq);
+
+    test("an undo cancels its edit, a redo cancels the undo: E, E U, E U R at every cursor", () => {
+        expect(seqs([E])).toEqual([2]);
+        expect(seqs([E, U])).toEqual([]);
+        expect(seqs([E, U, R])).toEqual([6]);
+        expect(seqs([E, U, R], 1)).toEqual([6]);
+        expect(seqs([E, U, R], 2)).toEqual([]);
+        expect(seqs([E, U, R], 3)).toEqual([]);
+        expect(seqs([E, U, R], 4)).toEqual([6]);
+        expect(seqs([E, U, R], 5)).toEqual([6]);
+        expect(seqs([E, U, R], 6)).toEqual([]);
+        expect(seqs([E, U], 2)).toEqual([4]);
+        expect(seqs([E, U], 3)).toEqual([4]);
+    });
+
+    test("edits outside a chain, including an agent's between an undo and its redo, stay", () => {
+        const other = edit(5, undefined, "agent");
+        const mine = edit(7);
+        expect(seqs([E, U, other, R, mine])).toEqual([5, 6, 7]);
+        expect(seqs([E, U, other, R, mine], 2)).toEqual([5, 7]);
+        expect(seqs([E, U, other, R, mine], 6)).toEqual([7]);
+    });
+
+    test("a chain of four is nothing; of five, its last", () => {
+        const U2 = edit(8, 6);
+        const R2 = edit(10, 8);
+        expect(seqs([E, U, R, U2])).toEqual([]);
+        expect(seqs([E, U, R, U2, R2])).toEqual([10]);
+        expect(seqs([E, U, R, U2, R2], 4)).toEqual([10]);
     });
 });

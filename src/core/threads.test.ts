@@ -8,7 +8,15 @@ import { sandbox } from "../cli/testing.ts";
 import { createAnchor, resolveAnchor } from "./anchor.ts";
 import { hashText } from "./blocks.ts";
 import { readLog } from "./log.ts";
-import type { Anchor, Event, EventInput, SourceSplice, ThreadId } from "./model.ts";
+import {
+    isDocNote,
+    type AgentIdentity,
+    type Anchor,
+    type Event,
+    type EventInput,
+    type SourceSplice,
+    type ThreadId,
+} from "./model.ts";
 import {
     buildSource,
     checkProperty,
@@ -26,6 +34,8 @@ import {
     isStalled,
     needsAgent,
     nextThreadId,
+    reanchorInput,
+    withoutDeleted,
     type DocState,
 } from "./threads.ts";
 
@@ -84,7 +94,6 @@ describe("thread state transitions", () => {
             replace: "better words",
             note: "Tightened.",
             apply: false,
-            downgraded: false,
         });
         const suggested = thread(foldLog(events));
         expect(suggested.state).toBe("replied");
@@ -103,7 +112,6 @@ describe("thread state transitions", () => {
             id: "c1",
             replace: "x",
             apply: false,
-            downgraded: false,
         };
         const withNote = thread(
             foldLog(
@@ -149,7 +157,6 @@ describe("thread state transitions", () => {
                 anchor,
                 replace: "y",
                 apply: false,
-                downgraded: false,
             }),
         );
         expect(thread(state)).toMatchObject({ state: "replied", createdBy: "agent", anchor });
@@ -164,7 +171,6 @@ describe("thread state transitions", () => {
                 id: "c1",
                 replace: "new",
                 apply: true,
-                downgraded: false,
             },
             {
                 type: "edit",
@@ -238,18 +244,119 @@ describe("doc state", () => {
             log(
                 comment("c1"),
                 { type: "hold", by: "user", on: true },
-                { type: "setting", by: "user", key: "suggestionsOnly", value: true },
-                { type: "setting", by: "user", key: "autoApply", value: true, id: "c1" },
+                { type: "setting", by: "user", key: "autoApply", value: true },
+                { type: "setting", by: "user", key: "autoApply", value: false },
                 { type: "cursor", by: "agent", stream: "watch", upTo: 4 },
                 { type: "cursor", by: "agent", stream: "watch", upTo: 2 },
                 { type: "cursor", by: "agent", stream: "pending", upTo: 6 },
             ),
         );
-        expect(state.settings).toEqual({ hold: true, suggestionsOnly: true, autoApply: false });
-        expect(thread(state).autoApply).toBe(true);
+        expect(state.settings).toEqual({ hold: true, autoApply: false });
         expect(state.cursors).toEqual({ watch: 4, pending: 6 });
         expect(state.agentSeenAt).toBe(new Date(T0 + 6000).toISOString());
         expect(state.version).toBe(7);
+    });
+
+    test("retired settings in older logs are read and ignored", () => {
+        // Logs written before #11: a suggestions-only switch, per-thread auto-apply, and
+        // `downgraded` on suggest events. They are no longer in the event types.
+        const legacy = [
+            comment("c1"),
+            { type: "setting", by: "user", key: "suggestionsOnly", value: true },
+            { type: "setting", by: "user", key: "autoApply", value: true, id: "c1" },
+            {
+                type: "suggest",
+                by: "agent",
+                id: "c1",
+                replace: "words",
+                apply: false,
+                downgraded: true,
+            },
+        ] as unknown as EventInput[];
+        const state = foldLog(log(...legacy));
+        expect(state.settings).toEqual({ hold: false, autoApply: false });
+        expect(thread(state)).not.toHaveProperty("autoApply");
+        expect(thread(state)).toMatchObject({
+            state: "replied",
+            suggestion: { replace: "words", status: "pending" },
+        });
+    });
+
+    test("a doc-level auto-apply from an older log still holds", () => {
+        const legacy = [
+            { type: "setting", by: "user", key: "suggestionsOnly", value: true },
+            { type: "setting", by: "user", key: "autoApply", value: true },
+        ] as unknown as EventInput[];
+        expect(foldLog(log(...legacy)).settings).toEqual({ hold: false, autoApply: true });
+    });
+
+    test("messages and suggestions carry the agent's identity when the event has one", () => {
+        const foreman = { name: "foreman", client: "claude-code" } as const;
+        const state = foldLog(
+            log(
+                comment("c1"),
+                { type: "reply", by: "agent", agent: foreman, id: "c1", text: "Old cache." },
+                { type: "reply", by: "agent", id: "c1", text: "From an older build." },
+                {
+                    type: "suggest",
+                    by: "agent",
+                    agent: foreman,
+                    id: "c1",
+                    replace: "new",
+                    note: "Tighter.",
+                    apply: false,
+                },
+            ),
+        );
+        const messages = thread(state).messages;
+        expect(messages.map((message) => message.agent)).toEqual([
+            undefined,
+            foreman,
+            undefined,
+            foreman,
+        ]);
+        expect(thread(state).suggestion?.agent).toEqual(foreman);
+    });
+
+    test("an identity from a log we did not write is validated before it reaches a message", () => {
+        const hostile = (agent: unknown): EventInput =>
+            ({ type: "reply", by: "agent", agent, id: "c1", text: "Hi." }) as EventInput;
+        const state = foldLog(
+            log(
+                comment("c1"),
+                hostile({ name: "ghost", client: "toString" }),
+                hostile({ name: "ghost", client: "__proto__" }),
+                hostile({ name: "ghost", client: "constructor" }),
+                hostile({ name: { call: 1 }, client: "codex" }),
+                hostile({ name: "n".repeat(500), client: "codex" }),
+                hostile({ name: 7, client: "cursor" }),
+                hostile("foreman"),
+                hostile(null),
+                {
+                    type: "suggest",
+                    by: "agent",
+                    agent: { name: "ghost", client: "vim" } as unknown as AgentIdentity,
+                    id: "c1",
+                    replace: "new",
+                    apply: false,
+                },
+            ),
+        );
+        expect(
+            thread(state)
+                .messages.slice(1)
+                .map((message) => message.agent),
+        ).toEqual([
+            { name: "ghost", client: "unknown" },
+            { name: "ghost", client: "unknown" },
+            { name: "ghost", client: "unknown" },
+            { name: "Codex", client: "codex" },
+            { name: "n".repeat(200), client: "codex" },
+            { name: "Cursor", client: "cursor" },
+            { name: "Agent", client: "unknown" },
+            { name: "Agent", client: "unknown" },
+        ]);
+        expect(thread(state).suggestion?.agent).toEqual({ name: "ghost", client: "unknown" });
     });
 
     test("an outside change without a splice marks the doc and leaves anchors", () => {
@@ -260,6 +367,151 @@ describe("doc state", () => {
         expect(thread(state).anchor).toEqual(anchor);
     });
 });
+
+describe("delete and undelete", () => {
+    const del = (id: ThreadId): EventInput => ({ type: "delete", by: "user", id });
+    const undel = (id: ThreadId): EventInput => ({ type: "undelete", by: "user", id });
+    const claimed: EventInput[] = [comment("c1"), { type: "claim", by: "agent", ids: ["c1"] }];
+    const suggested: EventInput[] = [
+        comment("c1"),
+        { type: "claim", by: "agent", ids: ["c1"] },
+        {
+            type: "suggest",
+            by: "agent",
+            id: "c1",
+            replace: "better words",
+            apply: false,
+        },
+    ];
+
+    test.each([
+        ["a claimed thread", claimed],
+        ["a thread with a pending suggestion", suggested],
+        ["a held draft", [comment("c1", true)]],
+    ])("round trip leaves %s as it was", (_, inputs) => {
+        const before = foldLog(log(...inputs));
+        const deleted = foldLog(log(...inputs, del("c1")));
+        expect([...deleted.deleted]).toEqual(["c1"]);
+        expect(withoutDeleted(deleted).threads.has("c1")).toBe(false);
+        const after = foldLog(log(...inputs, del("c1"), undel("c1")));
+        expect(after.deleted.size).toBe(0);
+        expect(thread(after)).toEqual(thread(before));
+    });
+
+    test("a deleted thread's anchor still follows edits, for an undelete", () => {
+        const state = foldLog(
+            log(comment("c1"), del("c1"), {
+                type: "outside",
+                by: "user",
+                hashBefore: "a",
+                hashAfter: "b",
+                edit: { start: 0, before: "", after: "12345" },
+            }),
+        );
+        expect(thread(state).anchor!.hint).toBe(anchor.hint + 5);
+    });
+
+    test("views leave deleted threads out and other threads alone", () => {
+        const state = withoutDeleted(foldLog(log(comment("c1"), comment("c2"), del("c1"))));
+        expect([...state.threads.keys()]).toEqual(["c2"]);
+        expect(state.deleted.has("c1")).toBe(true);
+    });
+
+    test("deleting an unknown id marks nothing; a deleted id is never reused", () => {
+        expect(foldLog(log(comment("c1"), del("c2"))).deleted.size).toBe(0);
+        expect(nextThreadId(log(comment("c1"), del("c1")))).toBe("c2");
+    });
+});
+
+describe("retract", () => {
+    const agentReply: EventInput = { type: "reply", by: "agent", id: "c1", text: "Done" };
+    const userReply: EventInput = { type: "reply", by: "user", id: "c1", text: "Not yet" };
+    const suggested: EventInput = {
+        type: "suggest",
+        by: "agent",
+        id: "c1",
+        replace: "better words",
+        apply: false,
+    };
+    const retract = (of: number): EventInput => ({ type: "retract", by: "user", id: "c1", of });
+
+    test("a reply goes with its message; state and time go back while nothing changed them", () => {
+        const before = foldLog(log(comment("c1"), agentReply));
+        const after = foldLog(log(comment("c1"), agentReply, userReply, retract(3)));
+        expect(thread(after)).toEqual(thread(before));
+        expect(after.retractable.has(3)).toBe(false);
+        expect(after.version).toBe(4);
+    });
+
+    test("a resolve, a reopen and a plain reject put the state back exactly", () => {
+        const opened = foldLog(log(comment("c1"), agentReply));
+        expect(thread(opened).state).toBe("replied");
+        const resolved = log(comment("c1"), agentReply, { type: "resolve", by: "user", id: "c1" });
+        expect(thread(foldLog([...resolved, ...log(retract(3)).map(at(4))]))).toEqual(
+            thread(opened),
+        );
+        const reopened = [...resolved, ...log({ type: "reopen", by: "user", id: "c1" }).map(at(4))];
+        expect(thread(foldLog(reopened)).state).toBe("open");
+        expect(thread(foldLog([...reopened, ...log(retract(4)).map(at(5))])).state).toBe(
+            "resolved",
+        );
+        const rejected = foldLog(
+            log(comment("c1"), suggested, { type: "reject", by: "user", id: "c1" }, retract(3)),
+        );
+        expect(thread(rejected)).toMatchObject({
+            state: "replied",
+            suggestion: { status: "pending" },
+        });
+    });
+
+    test("an accept or a reject with a note makes the suggestion pending again, note gone", () => {
+        const pending = foldLog(log(comment("c1"), suggested));
+        const accepted = foldLog(
+            log(comment("c1"), suggested, { type: "accept", by: "user", id: "c1" }, retract(3)),
+        );
+        expect(thread(accepted)).toEqual(thread(pending));
+        const rejected = foldLog(
+            log(
+                comment("c1"),
+                suggested,
+                { type: "reject", by: "user", id: "c1", note: "No" },
+                retract(3),
+            ),
+        );
+        expect(thread(rejected)).toEqual(thread(pending));
+    });
+
+    test("a state changed since stays, and a newer suggestion is left alone", () => {
+        const state = foldLog(
+            log(
+                comment("c1"),
+                suggested,
+                { type: "accept", by: "user", id: "c1" },
+                { type: "reopen", by: "user", id: "c1" },
+                { ...suggested, replace: "newer" },
+                retract(3),
+            ),
+        );
+        expect(thread(state)).toMatchObject({
+            state: "replied",
+            suggestion: { replace: "newer", status: "pending" },
+        });
+    });
+
+    test("only the user's own thread events are retractable; unknown seqs change nothing", () => {
+        const state = foldLog(log(comment("c1"), agentReply, userReply));
+        expect([...state.retractable.keys()]).toEqual([3]);
+        expect(state.retractable.get(3)).toMatchObject({ id: "c1", type: "reply", after: "open" });
+        const same = foldLog(log(comment("c1"), agentReply, userReply, retract(2), retract(9)));
+        expect(thread(same).messages).toHaveLength(3);
+        expect(same.retractable.has(3)).toBe(true);
+    });
+});
+
+/** Re-numbers a built event to sit at `seq` in a longer log. */
+function at(seq: number) {
+    return (event: Event): Event => ({ ...event, seq });
+}
 
 describe("anchor rebase", () => {
     const splice = { start: 0, before: "", after: "12345" };
@@ -289,7 +541,7 @@ describe("anchor rebase", () => {
             headingPath: [],
         });
         const state = foldLog(log(comment("c1"), edit(0, "", "12345"), edit(0, "123", "")));
-        expect(thread(state).anchor.hint).toBe(anchor.hint + 2);
+        expect(thread(state).anchor!.hint).toBe(anchor.hint + 2);
     });
 
     test("an edit that removes the quote keeps the last anchor", () => {
@@ -329,7 +581,6 @@ describe("anchor rebase", () => {
                     anchor,
                     replace: "new",
                     apply: true,
-                    downgraded: false,
                 },
             ),
         );
@@ -349,7 +600,7 @@ describe("anchors after an unlogged outside edit (gate B)", () => {
             writeFileSync(box.doc, box.text().replace("## Findings", `## Findings\n${insert}`));
             const ack = await suggest(box.doc, { id, replace: "slow path", apply: true });
             expect(ack).toMatchObject({ ok: true, id });
-            const anchor = thread(await box.state(), id).anchor;
+            const anchor = thread(await box.state(), id).anchor!;
             return { anchor, source: box.text() };
         } finally {
             box.cleanup();
@@ -408,7 +659,7 @@ describe("anchors after an unlogged outside edit (gate B)", () => {
             const id = await box.comment("cold path", "Why?");
             const ack = await suggest(box.doc, { find: "path rar", replace: "route", apply: true });
             expect(ack).toMatchObject({ ok: true });
-            const anchor = thread(await box.state(), id).anchor;
+            const anchor = thread(await box.state(), id).anchor!;
             const source = box.text();
             expect(anchor.exact).toBe("cold routeely");
             expect(source.slice(anchor.hint, anchor.hint + anchor.exact.length)).toBe(anchor.exact);
@@ -430,7 +681,7 @@ describe("catch-up after a change no event describes (gate B, round 2)", () => {
                 apply: true,
             });
             expect(ack).toMatchObject({ ok: true });
-            const anchor = thread(await box.state(), id).anchor;
+            const anchor = thread(await box.state(), id).anchor!;
             const source = box.text();
             expect(anchor.exact).toBe("cold path very rarely runs");
             expect(source.slice(anchor.hint, anchor.hint + anchor.exact.length)).toBe(anchor.exact);
@@ -460,7 +711,7 @@ describe("catch-up after a change no event describes (gate B, round 2)", () => {
         expect(inputs.map((input) => input.type)).toEqual(["outside", "reanchor"]);
         expect(catchUpInputs(events, base)).toEqual([]);
         const state = foldLog(log(...events, ...inputs));
-        expect(thread(state).anchor.hint).toBe(moved.indexOf("cold path"));
+        expect(thread(state).anchor!.hint).toBe(moved.indexOf("cold path"));
     });
 
     /** A comment on `base`, the reanchor that vouches for it, and an edit input on `moved`. */
@@ -495,10 +746,10 @@ describe("catch-up after a change no event describes (gate B, round 2)", () => {
         const moved = `x${base}`;
         const edit = { start: 10, before: "e", after: "Q" };
         const final = `${moved.slice(0, 10)}Q${moved.slice(11)}`;
-        expect(isWrong(final, thread(foldLog(log(...events, editInput(edit)))).anchor)).toBe(true);
+        expect(isWrong(final, thread(foldLog(log(...events, editInput(edit)))).anchor!)).toBe(true);
         const caughtUp = foldLog(log(...events, ...catchUpInputs(events, moved), editInput(edit)));
-        expect(thread(caughtUp).anchor.exact).toBe("ThQ cold ");
-        expect(isWrong(final, thread(caughtUp).anchor)).toBe(false);
+        expect(thread(caughtUp).anchor!.exact).toBe("ThQ cold ");
+        expect(isWrong(final, thread(caughtUp).anchor!)).toBe(false);
     });
 
     test(
@@ -549,7 +800,7 @@ describe("catch-up after a change no event describes (gate B, round 2)", () => {
                         );
                         const state = foldLog(caughtUp);
                         expect(foldLog(caughtUp)).toEqual(state);
-                        expect(isWrong(final, thread(state).anchor)).toBe(false);
+                        expect(isWrong(final, thread(state).anchor!)).toBe(false);
                     },
                 ),
                 10_000,
@@ -627,5 +878,72 @@ for (let i = 0; i < ${perWorker}; i++) {
         } finally {
             rmSync(dir, { recursive: true, force: true });
         }
+    });
+});
+
+describe("doc notes", () => {
+    const note = (id: ThreadId, draft = false): EventInput => ({
+        type: "comment",
+        by: "user",
+        id,
+        text: "Tighten the whole thing?",
+        draft,
+    });
+    const splice: EventInput = {
+        type: "edit",
+        by: "user",
+        cause: "user",
+        start: 0,
+        before: "",
+        after: "12345",
+        line: 1,
+        headingPath: [],
+    };
+
+    test("a comment without an anchor is an open doc note, never detached", () => {
+        const state = foldLog(log(note("c1"), note("c2", true)));
+        expect(isDocNote(thread(state))).toBe(true);
+        expect(thread(state)).toMatchObject({ state: "open", detached: false, claimed: false });
+        expect(thread(state).anchor).toBeUndefined();
+        expect(thread(state, "c2").state).toBe("draft");
+        expect(isDocNote(thread(foldLog(log(comment("c3"))), "c3"))).toBe(false);
+    });
+
+    test("splices and outside changes move anchored threads and leave a doc note alone", () => {
+        const state = foldLog(
+            log(note("c1"), comment("c2"), splice, {
+                type: "outside",
+                by: "user",
+                hashBefore: "a",
+                hashAfter: "b",
+                edit: { start: 0, before: "", after: "ab" },
+            }),
+        );
+        expect(thread(state).anchor).toBeUndefined();
+        expect(thread(state, "c2").anchor!.hint).toBe(anchor.hint + 7);
+    });
+
+    test("re-pinning by quote skips doc notes", () => {
+        const source = `some ${anchor.exact} here`;
+        expect(reanchorInput(foldLog(log(note("c1"))), source)).toBeNull();
+        const moved = reanchorInput(foldLog(log(note("c1"), comment("c2"))), source);
+        expect(moved).toMatchObject({ type: "reanchor", anchors: { c2: expect.anything() } });
+        expect(Object.keys((moved as { anchors: object }).anchors)).toEqual(["c2"]);
+    });
+
+    test("a doc note goes through claim, reply, resolve, delete and undelete like any thread", () => {
+        const events = log(
+            note("c1"),
+            { type: "claim", by: "agent", ids: ["c1"] },
+            { type: "reply", by: "agent", id: "c1", text: "Done." },
+            { type: "resolve", by: "user", id: "c1" },
+            { type: "delete", by: "user", id: "c1" },
+            { type: "undelete", by: "user", id: "c1" },
+        );
+        const states = events.map((_, i) => thread(foldLog(events.slice(0, i + 1))).state);
+        expect(states).toEqual(["open", "working", "replied", "resolved", "resolved", "resolved"]);
+        expect(needsAgent(thread(foldLog(events.slice(0, 2))))).toBe(true);
+        expect(withoutDeleted(foldLog(events.slice(0, 5))).threads.has("c1")).toBe(false);
+        expect(thread(foldLog(events)).anchor).toBeUndefined();
     });
 });

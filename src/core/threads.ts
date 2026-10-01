@@ -1,3 +1,4 @@
+import { signedFromLog } from "./agent.ts";
 import { createAnchor, rebaseAnchor, resolveAnchor } from "./anchor.ts";
 import { hashText } from "./blocks.ts";
 import { transact, type LogTxn } from "./log.ts";
@@ -10,15 +11,39 @@ import type {
     EventInput,
     IsoTime,
     SourceSplice,
+    Suggestion,
     Thread,
     ThreadId,
+    ThreadState,
 } from "./model.ts";
 
 /** A working thread with no activity for this long shows as "stalled". */
 export const STALL_MS = 10 * 60 * 1000;
 
+/** What a user's thread event changed, kept by seq so a retract can put it back. */
+export interface Retractable {
+    id: ThreadId;
+    type: "reply" | "accept" | "reject" | "resolve" | "reopen";
+    before: Pick<Thread, "state" | "lastActivity"> & { suggestion?: Suggestion["status"] };
+    /** The state the event set; the retract restores `before` only while this still holds. */
+    after: ThreadState;
+}
+
+const RETRACTABLE: ReadonlySet<Event["type"]> = new Set<Retractable["type"]>([
+    "reply",
+    "accept",
+    "reject",
+    "resolve",
+    "reopen",
+]);
+
 export interface DocState {
+    /** Deleted threads stay here, still rebased, so an undelete brings them back as they were. */
     threads: Map<ThreadId, Thread>;
+    /** Hidden from every view; agent commands on these are refused. */
+    deleted: Set<ThreadId>;
+    /** The user's own thread events not yet taken back, by seq. */
+    retractable: Map<number, Retractable>;
     settings: DocSettings;
     /** Highest `upTo` seen per agent stream; 0 when the agent has never read. */
     cursors: { watch: number; pending: number };
@@ -34,7 +59,9 @@ export interface DocState {
 export function emptyState(): DocState {
     return {
         threads: new Map(),
-        settings: { hold: false, suggestionsOnly: false, autoApply: false },
+        deleted: new Set(),
+        retractable: new Map(),
+        settings: { hold: false, autoApply: false },
         cursors: { watch: 0, pending: 0 },
         edits: [],
         version: 0,
@@ -56,6 +83,7 @@ export function foldLog(events: readonly Event[]): DocState {
  */
 function rebaseAll(state: DocState, splice: SourceSplice, owner?: ThreadId): void {
     for (const thread of state.threads.values()) {
+        if (!thread.anchor) continue;
         const own = thread.id === owner;
         thread.anchor = rebaseAnchor(thread.anchor, splice, { own }) ?? thread.anchor;
     }
@@ -64,6 +92,56 @@ function rebaseAll(state: DocState, splice: SourceSplice, owner?: ThreadId): voi
 /** Folds one event into `state` in place. Events must arrive in log order. */
 export function applyEvent(state: DocState, event: Event): DocState {
     state.version = event.seq;
+    const thread =
+        "id" in event && event.id !== undefined ? state.threads.get(event.id) : undefined;
+    const before =
+        thread && event.by === "user" && RETRACTABLE.has(event.type)
+            ? {
+                  state: thread.state,
+                  lastActivity: thread.lastActivity,
+                  suggestion: thread.suggestion?.status,
+              }
+            : undefined;
+    applyEventBody(state, event);
+    if (before && thread) {
+        state.retractable.set(event.seq, {
+            id: thread.id,
+            type: event.type as Retractable["type"],
+            before,
+            after: thread.state,
+        });
+    }
+    return state;
+}
+
+/**
+ * Puts back what the user's event `seq` changed: its message goes, the state and time only if
+ * nothing changed them since, and a suggestion it accepted or rejected is pending again if it
+ * was pending before and is still the same one.
+ */
+function retract(state: DocState, seq: number): void {
+    const record = state.retractable.get(seq);
+    const thread = record && state.threads.get(record.id);
+    if (!record || !thread) {
+        return;
+    }
+    state.retractable.delete(seq);
+    thread.messages = thread.messages.filter((message) => message.seq !== seq);
+    if (thread.state === record.after) {
+        thread.state = record.before.state;
+        thread.lastActivity = record.before.lastActivity;
+    }
+    if (
+        thread.suggestion &&
+        thread.suggestion.seq < seq &&
+        record.before.suggestion === "pending" &&
+        (record.type === "accept" || record.type === "reject")
+    ) {
+        thread.suggestion.status = "pending";
+    }
+}
+
+function applyEventBody(state: DocState, event: Event): void {
     switch (event.type) {
         case "comment": {
             const thread = newThread(event.id, event.anchor, event.by, event.at);
@@ -96,6 +174,7 @@ export function applyEvent(state: DocState, event: Event): DocState {
             thread.suggestion = {
                 seq: event.seq,
                 by: event.by,
+                ...signedFromLog(event.agent),
                 replace: event.replace,
                 status: event.apply ? "accepted" : "pending",
             };
@@ -137,6 +216,11 @@ export function applyEvent(state: DocState, event: Event): DocState {
         case "cursor":
             state.agentSeenAt = event.at;
             state.cursors[event.stream] = Math.max(state.cursors[event.stream], event.upTo);
+            for (const thread of state.threads.values()) {
+                if (event.ids === undefined || event.ids.includes(thread.id)) {
+                    thread.notifiedAt = event.at;
+                }
+            }
             break;
         case "accept": {
             const thread = state.threads.get(event.id);
@@ -177,6 +261,17 @@ export function applyEvent(state: DocState, event: Event): DocState {
             thread.state = event.type === "resolve" ? "resolved" : "open";
             break;
         }
+        case "delete":
+            if (state.threads.has(event.id)) {
+                state.deleted.add(event.id);
+            }
+            break;
+        case "undelete":
+            state.deleted.delete(event.id);
+            break;
+        case "retract":
+            retract(state, event.of);
+            break;
         case "send":
             for (const id of event.ids) {
                 const thread = state.threads.get(id);
@@ -189,17 +284,13 @@ export function applyEvent(state: DocState, event: Event): DocState {
         case "hold":
             state.settings.hold = event.on;
             break;
-        case "setting": {
-            if (event.id === undefined) {
-                state.settings[event.key] = event.value;
-                break;
-            }
-            const thread = state.threads.get(event.id);
-            if (thread && event.key === "autoApply") {
-                thread.autoApply = event.value;
+        case "setting":
+            // Older logs also hold the retired `suggestionsOnly` key and per-thread auto-apply
+            // (an `id`); both are ignored.
+            if (event.key === "autoApply" && !("id" in event)) {
+                state.settings.autoApply = event.value;
             }
             break;
-        }
         case "edit": {
             state.edits.push(event);
             rebaseAll(state, event, event.id);
@@ -210,7 +301,11 @@ export function applyEvent(state: DocState, event: Event): DocState {
             thread.lastActivity = event.at;
             if (event.cause === "apply") {
                 thread.applied = appliedFrom(event);
-            } else if (event.cause === "revert" && thread.applied) {
+            } else if (
+                event.cause === "revert" &&
+                thread.applied &&
+                thread.applied.after === event.before
+            ) {
                 thread.applied.reverted = true;
             }
             break;
@@ -231,19 +326,22 @@ export function applyEvent(state: DocState, event: Event): DocState {
             }
             break;
     }
-    return state;
 }
 
-function newThread(id: ThreadId, anchor: Anchor, by: Thread["createdBy"], at: IsoTime): Thread {
+function newThread(
+    id: ThreadId,
+    anchor: Anchor | undefined,
+    by: Thread["createdBy"],
+    at: IsoTime,
+): Thread {
     return {
         id,
         state: "open",
-        anchor,
+        ...(anchor ? { anchor } : {}),
         detached: false,
         createdBy: by,
         messages: [],
         claimed: false,
-        autoApply: false,
         lastActivity: at,
     };
 }
@@ -259,7 +357,16 @@ function appliedFrom(edit: EditEvent): AppliedEdit {
 }
 
 function message(event: Event, text: string): Thread["messages"][number] {
-    return { seq: event.seq, at: event.at, by: event.by, text };
+    return { seq: event.seq, at: event.at, by: event.by, ...signedFromLog(event.agent), text };
+}
+
+/** The state as every view sees it: deleted threads left out. */
+export function withoutDeleted(state: DocState): DocState {
+    if (state.deleted.size === 0) {
+        return state;
+    }
+    const threads = new Map([...state.threads].filter(([id]) => !state.deleted.has(id)));
+    return { ...state, threads };
 }
 
 /** Threads `pending` returns: sent and waiting on the agent, claimed or not. */
@@ -308,12 +415,12 @@ export function reanchorInput(state: DocState, source: string): EventInput | nul
     const anchors: Partial<Record<ThreadId, Anchor>> = {};
     let moved = false;
     for (const thread of state.threads.values()) {
-        const range = resolveAnchor(source, thread.anchor);
-        if (!range) {
+        const old = thread.anchor;
+        const range = old && resolveAnchor(source, old);
+        if (!old || !range) {
             continue;
         }
         const fresh = createAnchor(source, range);
-        const old = thread.anchor;
         if (fresh.hint !== old.hint || fresh.prefix !== old.prefix || fresh.suffix !== old.suffix) {
             anchors[thread.id] = fresh;
             moved = true;

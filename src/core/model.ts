@@ -10,6 +10,14 @@ export type IsoTime = string;
 
 export type Author = "user" | "agent";
 
+export type AgentClient = "claude-code" | "codex" | "cursor" | "unknown";
+
+/** Who an agent-side command said it was. Absent in logs written before it existed. */
+export interface AgentIdentity {
+    name: string;
+    client: AgentClient;
+}
+
 /** Allocated under the log lock, never reused. */
 export type ThreadId = `c${number}`;
 
@@ -81,21 +89,24 @@ export interface Range {
 
 // Log events. The JSONL log is the only persisted state; everything below it is a fold.
 
-export type EditCause = "user" | "accept" | "apply" | "revert";
+export type EditCause = "user" | "accept" | "apply" | "revert" | "undo";
 
-export type DocSettingKey = "suggestionsOnly" | "autoApply";
+export type DocSettingKey = "autoApply";
 
 interface EventBase {
     /** Position in the log, 1-based, allocated under the lock. */
     seq: number;
     at: IsoTime;
     by: Author;
+    /** Set when `by` is `agent` and the writer knew its identity. */
+    agent?: AgentIdentity;
 }
 
 export interface CommentEvent extends EventBase {
     type: "comment";
     id: ThreadId;
-    anchor: Anchor;
+    /** Absent for a doc note: a thread on the whole doc, never anchored to text. */
+    anchor?: Anchor;
     text: string;
     /** True while hold mode is on; `send` opens it. */
     draft: boolean;
@@ -118,8 +129,6 @@ export interface SuggestEvent extends EventBase {
     anchor?: Anchor;
     /** Applied directly (`--apply` or auto-apply). */
     apply: boolean;
-    /** `--apply` was asked for but the doc is suggestions only. */
-    downgraded: boolean;
 }
 
 export interface AcceptEvent extends EventBase {
@@ -144,6 +153,29 @@ export interface ReopenEvent extends EventBase {
     id: ThreadId;
 }
 
+/** User only. The thread stays in the fold but every view hides it; agent commands are refused. */
+export interface DeleteEvent extends EventBase {
+    type: "delete";
+    id: ThreadId;
+}
+
+/** User only. Brings a deleted thread back as it was; its anchor re-resolves as usual. */
+export interface UndeleteEvent extends EventBase {
+    type: "undelete";
+    id: ThreadId;
+}
+
+/**
+ * User only. Takes back the user's own reply, accept, reject, resolve or reopen `seq` on thread
+ * `id` before the agent read it: the fold drops its message and puts the state back.
+ */
+export interface RetractEvent extends EventBase {
+    type: "retract";
+    id: ThreadId;
+    /** Seq of the event taken back. */
+    of: number;
+}
+
 /** `before` at `start` became `after`. Anchors are rebased over these in log order. */
 export interface SourceSplice {
     start: Offset;
@@ -155,6 +187,8 @@ export interface SourceSplice {
 export interface EditEvent extends EventBase, SourceSplice {
     type: "edit";
     cause: EditCause;
+    /** With cause `undo`: seq of the edit this one inverts (an undo, or the undo a redo inverts). */
+    of?: number;
     line: number;
     headingPath: string[];
     /** Thread the edit came from (accept, apply, revert). */
@@ -174,6 +208,11 @@ export interface CursorEvent extends EventBase {
     type: "cursor";
     stream: "watch" | "pending";
     upTo: number;
+    /**
+     * The threads this read named to the agent; empty when it moved the cursor past a batch that
+     * printed nothing. Absent in older logs, which are read as having named every thread.
+     */
+    ids?: ThreadId[];
 }
 
 export interface HoldEvent extends EventBase {
@@ -191,8 +230,6 @@ export interface SettingEvent extends EventBase {
     type: "setting";
     key: DocSettingKey;
     value: boolean;
-    /** Per-thread auto-apply; absent means the whole doc. */
-    id?: ThreadId;
 }
 
 /** The file changed on disk outside margin (editor, git). Never in the agent's feed. */
@@ -230,6 +267,9 @@ export type Event =
     | RejectEvent
     | ResolveEvent
     | ReopenEvent
+    | DeleteEvent
+    | UndeleteEvent
+    | RetractEvent
     | EditEvent
     | ClaimEvent
     | CursorEvent
@@ -256,12 +296,14 @@ export interface Message {
     seq: number;
     at: IsoTime;
     by: Author;
+    agent?: AgentIdentity;
     text: string;
 }
 
 export interface Suggestion {
     seq: number;
     by: Author;
+    agent?: AgentIdentity;
     replace: string;
     status: "pending" | "accepted" | "rejected";
 }
@@ -278,8 +320,9 @@ export interface AppliedEdit {
 export interface Thread {
     id: ThreadId;
     state: ThreadState;
-    anchor: Anchor;
-    /** True only when `anchor.exact` is gone from the source. */
+    /** Absent for a doc note (see `isDocNote`), which no anchor machinery ever sees. */
+    anchor?: Anchor;
+    /** True only when `anchor.exact` is gone from the source; never for a doc note. */
     detached: boolean;
     createdBy: Author;
     messages: Message[];
@@ -287,17 +330,22 @@ export interface Thread {
     suggestion?: Suggestion;
     applied?: AppliedEdit;
     claimed: boolean;
-    autoApply: boolean;
     followsEdit?: number;
     /** Time of the last event on this thread; "stalled" is working with none for 10 min. */
     lastActivity: IsoTime;
+    /** Time of the last agent cursor that named this thread (an older cursor names every one). */
+    notifiedAt?: IsoTime;
+}
+
+/** A thread on the whole doc: no quote, never detached, never in the margin rail. */
+export function isDocNote(thread: Pick<Thread, "anchor">): boolean {
+    return thread.anchor === undefined;
 }
 
 // In-memory store behind the UI. The mockup and the server implement it; components use only this.
 
 export interface DocSettings {
     hold: boolean;
-    suggestionsOnly: boolean;
     autoApply: boolean;
 }
 
@@ -325,7 +373,8 @@ export type SaveResult =
 export interface DocStore {
     snapshot(): DocSnapshot;
     subscribe(listener: (snapshot: DocSnapshot) => void): () => void;
-    comment(input: { anchor: Anchor; text: string }): Promise<ThreadId>;
+    /** Without an anchor, a doc note. */
+    comment(input: { anchor?: Anchor; text: string }): Promise<ThreadId>;
     /** A user suggestion creates a thread carrying a proposed replacement. */
     suggest(input: { anchor: Anchor; replace: string; text?: string }): Promise<ThreadId>;
     reply(id: ThreadId, text: string): Promise<void>;
@@ -333,14 +382,29 @@ export interface DocStore {
     reject(id: ThreadId, note?: string): Promise<void>;
     resolve(id: ThreadId): Promise<void>;
     reopen(id: ThreadId): Promise<void>;
+    /** Hides the thread everywhere (a held draft is discarded); `undeleteThread` reverses it. */
+    deleteThread(id: ThreadId): Promise<void>;
+    undeleteThread(id: ThreadId): Promise<void>;
     revert(id: ThreadId): Promise<SaveResult>;
     /** Compare-and-swap on `before` at `start`. */
     saveUnit(edit: { start: Offset; before: string; after: string }): Promise<SaveResult>;
     followThrough(editSeq: number, text: string): Promise<ThreadId>;
     setHold(on: boolean): Promise<void>;
     sendAll(): Promise<void>;
-    setSetting(key: DocSettingKey, value: boolean, id?: ThreadId): Promise<void>;
+    setSetting(key: DocSettingKey, value: boolean): Promise<void>;
     dismissChangedOnDisk(): void;
+    /** The link to the host behind the store; a store without one (in memory) is always live. */
+    status?(): StoreStatus;
+    subscribeStatus?(listener: (status: StoreStatus) => void): () => void;
+}
+
+/** `reconnecting` is the browser's own retry; `lost` is a stream closed for good, retried by us. */
+export type Connection = "live" | "reconnecting" | "lost";
+
+export interface StoreStatus {
+    connection: Connection;
+    /** The last request the host refused or never answered, until the next one succeeds. */
+    problem?: string;
 }
 
 // CLI output shapes. Text renderings are what the agent reads; these are the renderers' input.
@@ -350,12 +414,15 @@ export type WakeReason = "new" | "reply" | "rejected";
 /** One compact line per batch; the agent then reads the threads through `pending`. */
 export interface WatchLine {
     form: "compact";
-    groups: { reason: WakeReason; ids: ThreadId[]; path?: string }[];
+    /** `doc`: every id is a doc note; printed as `doc` where the path would go. */
+    groups: { reason: WakeReason; ids: ThreadId[]; path?: string; doc?: true }[];
 }
 
 export interface PendingThread {
     id: ThreadId;
     state: ThreadState;
+    /** A doc note: no quote or context; `path` is "" and `line` 0. */
+    doc?: true;
     path: string;
     line: number;
     detached: boolean;
@@ -391,8 +458,17 @@ export interface ShowOutput {
 }
 
 export type AckError =
-    "not-found" | "resolved" | "detached" | "before-missing" | "not-unique" | "bad-args" | "locked";
+    | "not-found"
+    | "resolved"
+    | "detached"
+    | "before-missing"
+    | "not-unique"
+    | "bad-args"
+    | "locked"
+    | "deleted"
+    /** `suggest` on a doc note. */
+    | "no-anchor";
 
 export type Ack =
-    | { ok: true; id: ThreadId; state: ThreadState; downgraded?: boolean }
+    | { ok: true; id: ThreadId; state: ThreadState }
     | { ok: false; id?: ThreadId; error: AckError; detail?: string };

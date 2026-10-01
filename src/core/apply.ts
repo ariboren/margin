@@ -10,17 +10,29 @@ import {
     writeSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { signed } from "./agent.ts";
 import { decodeSource, hashText, lineAt, parseDoc, spliceEdit, unitAt } from "./blocks.ts";
 import { transact, type LogTxn } from "./log.ts";
 import type { LockOptions } from "./lock.ts";
-import type { Author, EditCause, EditEvent, Offset, SourceSplice, ThreadId } from "./model.ts";
+import type {
+    AgentIdentity,
+    Author,
+    EditCause,
+    EditEvent,
+    Offset,
+    SourceSplice,
+    ThreadId,
+} from "./model.ts";
 import { catchUpInputs } from "./threads.ts";
 
 export interface ApplyInput extends SourceSplice {
     cause: EditCause;
     by: Author;
+    agent?: AgentIdentity;
     /** Thread the edit came from (accept, apply, revert). */
     id?: ThreadId;
+    /** The edit an undo inverts. */
+    of?: number;
 }
 
 export type ApplyFailure = "before-missing" | "not-unique" | "missing";
@@ -83,11 +95,13 @@ export function applyEditIn(txn: LogTxn, input: ApplyInput): ApplyResult {
         {
             type: "edit",
             by: input.by,
+            ...signed(input.agent),
             cause: input.cause,
             ...result.edit,
             line: lineAt(source, found),
             headingPath: unit?.headingPath ?? [],
             ...(input.id === undefined ? {} : { id: input.id }),
+            ...(input.of === undefined ? {} : { of: input.of }),
             hashAfter: hash,
         },
     ]);

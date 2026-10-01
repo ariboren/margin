@@ -2,7 +2,7 @@
 // are single long lines and a unified hunk would repeat the whole paragraph twice.
 import { diffWordsWithSpace } from "diff";
 import { byteLength, formatPath } from "./context.ts";
-import type { PendingEdit } from "./model.ts";
+import type { EditEvent, PendingEdit } from "./model.ts";
 
 export { byteLength };
 
@@ -97,18 +97,30 @@ function wordsBetween(list: Piece[], from: number, to: number): number {
     return count;
 }
 
-function render(piece: Piece): string {
+function render(piece: HunkPiece): string {
     const text = escapeLines(piece.text);
     if (piece.kind === "del") return `[-${text}-]`;
     if (piece.kind === "ins") return `{+${text}+}`;
     return text;
 }
 
+export interface HunkPiece {
+    kind: "same" | "del" | "ins";
+    text: string;
+}
+
+/** One hunk before rendering: its pieces in order, and whether text was cut on either side. */
+export interface HunkPieces {
+    pieces: HunkPiece[];
+    cutBefore: boolean;
+    cutAfter: boolean;
+}
+
 /**
- * Word-level hunks between two versions of a unit: each run of changes with up to `context`
- * words either side, `…` where the text was cut. Changes whose context would overlap share a hunk.
+ * Word-level hunks between two versions of a unit, as pieces: each run of changes with up to
+ * `context` words either side. Changes whose context would overlap share a hunk.
  */
-export function wordHunks(before: string, after: string, context = CONTEXT_WORDS): Hunk[] {
+export function hunkPieces(before: string, after: string, context = CONTEXT_WORDS): HunkPieces[] {
     const list = pieces(before, after);
     const changed = list.flatMap((piece, i) => (piece.kind === "same" ? [] : [i]));
     const groups: { first: number; last: number }[] = [];
@@ -125,14 +137,24 @@ export function wordHunks(before: string, after: string, context = CONTEXT_WORDS
         let end = contextEnd(list, last, context);
         while (start < first && !isWord(list[start])) start++;
         while (end > last + 1 && !isWord(list[end - 1])) end--;
-        let text = list.slice(0, start).some(isWord) ? "…" : "";
+        return {
+            pieces: list.slice(start, end).map(({ kind, text }) => ({ kind, text })),
+            cutBefore: list.slice(0, start).some(isWord),
+            cutAfter: list.slice(end).some(isWord),
+        };
+    });
+}
+
+/** `hunkPieces` rendered one line each, git word-diff style, with `…` where the text was cut. */
+export function wordHunks(before: string, after: string, context = CONTEXT_WORDS): Hunk[] {
+    return hunkPieces(before, after, context).map((hunk) => {
+        let text = hunk.cutBefore ? "…" : "";
         let changedBytes = 0;
-        for (let i = start; i < end; i++) {
-            const piece = list[i]!;
+        for (const piece of hunk.pieces) {
             if (piece.kind !== "same") changedBytes += byteLength(piece.text);
             text += render(piece);
         }
-        if (list.slice(end).some(isWord)) text += "…";
+        if (hunk.cutAfter) text += "…";
         return { text, changedBytes };
     });
 }
@@ -157,4 +179,32 @@ export function pendingEdit(edit: EditInput): PendingEdit {
 /** Plain-text rendering of one user edit in `pending`: a header line, then one line per hunk. */
 export function formatEdit(edit: PendingEdit): string {
     return [`edit L${edit.line} ${edit.path}`, ...edit.hunks.map((hunk) => `  ${hunk}`)].join("\n");
+}
+
+/**
+ * The edits worth showing after `cursor`: an undo cancels the edit it inverts and a redo the undo,
+ * so of each chain only the last unread member shows, and only when the unread part has odd length
+ * (its diff is then the net change since the cursor). Edits outside any chain show as they are.
+ */
+export function netEdits(edits: readonly EditEvent[], cursor = 0): EditEvent[] {
+    const chainOf = new Map<number, number>();
+    for (const edit of edits) {
+        const root = edit.of === undefined ? undefined : chainOf.get(edit.of);
+        chainOf.set(edit.seq, root ?? edit.of ?? edit.seq);
+    }
+    const unread = new Map<number, EditEvent[]>();
+    for (const edit of edits) {
+        if (edit.seq <= cursor) {
+            continue;
+        }
+        const root = chainOf.get(edit.seq) ?? edit.seq;
+        unread.set(root, [...(unread.get(root) ?? []), edit]);
+    }
+    const shown = new Set<EditEvent>();
+    for (const chain of unread.values()) {
+        if (chain.length % 2 === 1) {
+            shown.add(chain[chain.length - 1]!);
+        }
+    }
+    return edits.filter((edit) => shown.has(edit));
 }
