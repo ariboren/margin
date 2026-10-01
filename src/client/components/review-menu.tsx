@@ -116,6 +116,47 @@ export function canAskToFinish(model: ReviewModel): boolean {
     return total > 0 && !handedOver;
 }
 
+export interface VerdictAction {
+    label: string;
+    /** The status the button sets. */
+    state: VerdictState;
+    icon: "check" | "slash" | "reopen";
+    look: "accept" | "danger" | "primary";
+}
+
+/**
+ * The verdict buttons in the order they show and take focus: the positive or primary one first,
+ * as a thread card puts Accept before Reject. A dropped doc only reopens; approving is done from
+ * the open state.
+ */
+export function verdictActions(model: ReviewModel): VerdictAction[] {
+    const reopen: VerdictAction = {
+        label: "Reopen",
+        state: "open",
+        icon: "reopen",
+        look: "primary",
+    };
+    const drop = (label: string): VerdictAction => ({
+        label,
+        state: "dropped",
+        icon: "slash",
+        look: "danger",
+    });
+    switch (model.state) {
+        case "approved":
+            return [reopen, drop("Drop instead")];
+        case "dropped":
+            return [reopen];
+        case "open":
+            return model.unresolved.length === 0
+                ? [
+                      { label: "Approve", state: "approved", icon: "check", look: "accept" },
+                      drop("Drop"),
+                  ]
+                : [drop("Drop")];
+    }
+}
+
 /** The server refuses a longer note. */
 const NOTE_MAX = 200;
 
@@ -284,19 +325,20 @@ export function ReviewMenu(props: ReviewMenuProps): JSX.Element {
                         <div class="review-actions">
                             <button
                                 type="button"
-                                class="button button-quiet"
-                                onClick={() => setPanel({ kind: "main" })}
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="button"
                                 class="button button-accept"
                                 ref={confirm}
                                 disabled={busy || total === 0}
                                 onClick={() => setVerdict("approved", true)}
                             >
+                                <Mark kind="check" />
                                 Close {count(total, "thread")} and approve
+                            </button>
+                            <button
+                                type="button"
+                                class="button button-quiet"
+                                onClick={() => setPanel({ kind: "main" })}
+                            >
+                                Cancel
                             </button>
                         </div>
                     </>
@@ -325,24 +367,11 @@ export function ReviewMenu(props: ReviewMenuProps): JSX.Element {
                             : "Nothing is waiting. Approve when you're ready."}
                     </p>
                     {noteField}
-                    <div class="review-actions">
-                        <button
-                            type="button"
-                            class="button button-quiet"
-                            disabled={busy}
-                            onClick={() => setVerdict("dropped")}
-                        >
-                            Drop
-                        </button>
-                        <button
-                            type="button"
-                            class="button button-accept"
-                            disabled={busy}
-                            onClick={() => setVerdict("approved")}
-                        >
-                            Approve
-                        </button>
-                    </div>
+                    <VerdictButtons
+                        actions={verdictActions(model)}
+                        busy={busy}
+                        onPick={setVerdict}
+                    />
                 </>
             );
         }
@@ -385,16 +414,7 @@ export function ReviewMenu(props: ReviewMenuProps): JSX.Element {
                     ) : null}
                 </div>
                 {noteField}
-                <div class="review-actions">
-                    <button
-                        type="button"
-                        class="button button-quiet"
-                        disabled={busy}
-                        onClick={() => setVerdict("dropped")}
-                    >
-                        Drop
-                    </button>
-                </div>
+                <VerdictButtons actions={verdictActions(model)} busy={busy} onPick={setVerdict} />
             </>
         );
     };
@@ -456,7 +476,7 @@ function Standing({
     }
     const approved = verdict.state === "approved";
     const closed = verdict.closed?.length ?? 0;
-    const total = model.unresolved.length;
+
     return (
         <>
             <p class="review-head">
@@ -475,40 +495,7 @@ function Standing({
                     {count(closed, "thread")} {closed === 1 ? "was" : "were"} closed without action.
                 </p>
             ) : null}
-            {!approved && total > 0 ? (
-                <p class="review-quiet">
-                    Reopen to settle {count(total, "thread")} before approving.
-                </p>
-            ) : null}
-            <div class="review-actions">
-                {approved ? (
-                    <button
-                        type="button"
-                        class="button button-quiet"
-                        disabled={busy}
-                        onClick={() => setVerdict("dropped")}
-                    >
-                        Drop instead
-                    </button>
-                ) : total === 0 ? (
-                    <button
-                        type="button"
-                        class="button button-quiet"
-                        disabled={busy}
-                        onClick={() => setVerdict("approved")}
-                    >
-                        Approve instead
-                    </button>
-                ) : null}
-                <button
-                    type="button"
-                    class="button"
-                    disabled={busy}
-                    onClick={() => setVerdict("open")}
-                >
-                    Reopen
-                </button>
-            </div>
+            <VerdictButtons actions={verdictActions(model)} busy={busy} onPick={setVerdict} />
         </>
     );
 }
@@ -529,17 +516,59 @@ function Path(props: {
     );
 }
 
-function ToneMark({ tone }: { tone: ReviewTone }): JSX.Element {
-    if (tone === "finishing") {
-        return <span class="review-dot" aria-hidden="true" />;
-    }
+type MarkKind = VerdictAction["icon"];
+
+const markPaths: Record<MarkKind, string> = {
+    check: "M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5zM5.25 8.25l2 2 3.5-4",
+    slash: "M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5zM3.6 3.6l8.8 8.8",
+    reopen: "M2.75 8a5.25 5.25 0 1 0 1.7-3.85M2.5 2v3h3",
+};
+
+function Mark({ kind }: { kind: MarkKind }): JSX.Element {
     return (
         <svg class="review-mark" viewBox="0 0 16 16" aria-hidden="true">
-            {tone === "dropped" ? (
-                <path d="M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5zM3.6 3.6l8.8 8.8" />
-            ) : (
-                <path d="M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5zM5.25 8.25l2 2 3.5-4" />
-            )}
+            <path d={markPaths[kind]} />
         </svg>
+    );
+}
+
+function ToneMark({ tone }: { tone: ReviewTone }): JSX.Element {
+    return tone === "finishing" ? (
+        <span class="review-dot" aria-hidden="true" />
+    ) : (
+        <Mark kind={tone === "dropped" ? "slash" : "check"} />
+    );
+}
+
+const lookClass: Record<VerdictAction["look"], string> = {
+    accept: "button button-accept",
+    danger: "button button-danger-quiet",
+    primary: "button",
+};
+
+function VerdictButtons({
+    actions,
+    busy,
+    onPick,
+}: {
+    actions: VerdictAction[];
+    busy: boolean;
+    onPick: (state: VerdictState) => void;
+}): JSX.Element {
+    return (
+        <div class="review-actions">
+            {actions.map((action) => (
+                <button
+                    key={action.label}
+                    type="button"
+                    class={lookClass[action.look]}
+                    disabled={busy}
+                    onClick={() => onPick(action.state)}
+                >
+                    <Mark kind={action.icon} />
+                    {action.label}
+                </button>
+            ))}
+        </div>
     );
 }

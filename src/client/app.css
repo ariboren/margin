@@ -666,8 +666,19 @@
     .review-actions {
         display: flex;
         flex-wrap: wrap;
-        justify-content: flex-end;
         gap: 8px;
+    }
+
+    /* Clearly the negative choice, without a second filled button beside Approve. Two classes, so
+       it holds against the base button rule further down. */
+    .button.button-danger-quiet {
+        background: transparent;
+        border-color: color-mix(in srgb, var(--del) 70%, transparent);
+        color: var(--del);
+    }
+
+    .button.button-danger-quiet:hover {
+        background: var(--del-bg);
     }
 
     .review-unapplied {

@@ -12,6 +12,7 @@ import {
     reviewLabel,
     unappliedLine,
     unresolvedHead,
+    verdictActions,
 } from "./review-menu.tsx";
 
 const none = { agent: 0, user: 0, suggestion: 0, draft: 0 };
@@ -68,6 +69,44 @@ describe("reviewLabel", () => {
 
     test("a settled finish request with newer threads unresolved is back to Review", () => {
         expect(text({ unresolved: ["c7"], finish: { total: 3, remaining: 0 } })).toBe("Review");
+    });
+});
+
+describe("verdictActions", () => {
+    const shown = (change: Partial<ReviewModel>) =>
+        verdictActions(model(change)).map((action) => [action.label, action.state, action.look]);
+
+    test("an open doc with nothing unresolved offers Approve first, then Drop", () => {
+        expect(shown({})).toEqual([
+            ["Approve", "approved", "accept"],
+            ["Drop", "dropped", "danger"],
+        ]);
+    });
+
+    test("with threads unresolved only Drop is a button; approving goes through the paths", () => {
+        expect(shown({ unresolved: ["c1"] })).toEqual([["Drop", "dropped", "danger"]]);
+    });
+
+    test("an approved doc reopens first, then drops", () => {
+        expect(shown({ state: "approved" })).toEqual([
+            ["Reopen", "open", "primary"],
+            ["Drop instead", "dropped", "danger"],
+        ]);
+    });
+
+    test("a dropped doc only reopens, with or without threads unresolved", () => {
+        expect(shown({ state: "dropped" })).toEqual([["Reopen", "open", "primary"]]);
+        expect(shown({ state: "dropped", unresolved: ["c1", "c2"] })).toEqual([
+            ["Reopen", "open", "primary"],
+        ]);
+    });
+
+    test("every button carries an icon that matches what it does", () => {
+        const icons = (change: Partial<ReviewModel>) =>
+            verdictActions(model(change)).map((action) => action.icon);
+        expect(icons({})).toEqual(["check", "slash"]);
+        expect(icons({ state: "approved" })).toEqual(["reopen", "slash"]);
+        expect(icons({ state: "dropped" })).toEqual(["reopen"]);
     });
 });
 
