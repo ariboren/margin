@@ -20,8 +20,11 @@ One shell call: margin pending <doc>; margin show c7 (if clipped); one more with
 No Monitor: margin pending <doc> --wait blocks until a batch; rerun.
 Answer in the doc, then end the turn silently; chat only if asked for updates. Markdown is fine (bullets, `code`).
 Before a big rewrite, answer or resolve threads it covers, or they detach.
+Doc status (watch; pending line 1):
+  finish c3 c5: settle each, ask nothing, stop: suggest --apply + resolve, or reply --resolve; show <id> for context
+  approved: do what the doc says; approved changed: edited since; dropped: stop until reopened
 
-margin pending <doc>  waiting threads + user edits (edit L13 path [-old-]{+new+})
+margin pending <doc>  waiting threads (now working) + user edits (edit L13 path [-old-]{+new+})
   cN open doc: a whole-doc note, no quote. Reply or resolve; edit via suggest --find.
 margin show <id>  full unit + thread
 margin reply <id> "text" [--resolve]
@@ -35,5 +38,4 @@ Text starting with -: --replace=- or -- before it.
 Acks: ok c3 replied|resolved;
 err c3 <reason>[; detail]: not-found|resolved|deleted|detached|no-anchor|not-unique|before-missing|locked.
 Id commands find the doc; on "pass the doc: a.md": margin reply a.md c3 "…".
-The page names you by session title; --as <name> overrides.
 ```

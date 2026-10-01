@@ -9,10 +9,18 @@ import defaultCeilings from "../budget.json";
 import { run } from "../src/cli/main.ts";
 import { createAnchor } from "../src/core/anchor.ts";
 import { applyEdit } from "../src/core/apply.ts";
-import { decodeSource, flattenUnits, parseDoc } from "../src/core/blocks.ts";
+import { decodeSource, flattenUnits, hashText, parseDoc } from "../src/core/blocks.ts";
 import { byteLength, wordHunks } from "../src/core/diff.ts";
-import type { ParsedDoc, Range, ThreadId, Unit, UnitKind } from "../src/core/model.ts";
-import { createThread } from "../src/core/threads.ts";
+import { appendEvents, readLog } from "../src/core/log.ts";
+import type {
+    ParsedDoc,
+    Range,
+    ThreadId,
+    Unit,
+    UnitKind,
+    VerdictState,
+} from "../src/core/model.ts";
+import { createThread, foldLog, unresolvedThreads } from "../src/core/threads.ts";
 
 export type BudgetKey = keyof typeof defaultCeilings;
 export type Ceilings = Record<BudgetKey, number>;
@@ -299,6 +307,28 @@ async function seedComments(world: World, ids: ThreadId[]): Promise<void> {
 
 const allIds = threadSeeds.map((seed) => seed.id);
 
+// The verdict and the finish request are the user's, written by the page; no CLI command logs
+// either, so they are seeded as events.
+
+async function seedVerdict(world: World, state: VerdictState, closed?: ThreadId[]): Promise<void> {
+    const hash = hashText(readDoc(world).source);
+    await appendEvents(world.doc, [
+        { type: "verdict", by: "user", state, hash, ...(closed?.length ? { closed } : {}) },
+    ]);
+}
+
+async function unresolvedIds(world: World): Promise<ThreadId[]> {
+    const state = foldLog((await readLog(world.doc)).events);
+    return unresolvedThreads(state).map((thread) => thread.id);
+}
+
+/** Hands every unresolved thread to the agent, as the page's "ask the agent to finish" does. */
+async function seedFinish(world: World): Promise<ThreadId[]> {
+    const ids = await unresolvedIds(world);
+    await appendEvents(world.doc, [{ type: "finish", by: "user", ids }]);
+    return ids;
+}
+
 /** Top-level lines start a block (a thread or an edit); indented lines belong to it. */
 export function pendingBlocks(stdout: string): string[] {
     const blocks: string[][] = [];
@@ -322,6 +352,12 @@ export interface Measured {
     pendingBytes: { json: number; text: number };
     /** The line `watch` printed for each batch. */
     lines: string[];
+    /** The lines `watch` printed for the doc's status and for finish requests. */
+    statusLines: string[];
+    /** The `pending` reads that open with the review header. */
+    headed: string[];
+    /** A finish pass over all ten threads: the watch line, the `pending` read and ten acks. */
+    finishBytes: number;
     /** Thread blocks in the full `pending` that carry table-cell context. */
     cellThreads: number;
 }
@@ -367,6 +403,8 @@ export async function measure(source: string): Promise<Measured> {
     // The full loop: each batch wakes watch once, then one pending call reads its threads (the
     // first also carries the user edits), then one ack per thread.
     const lines: string[] = [];
+    const statusLines: string[] = [];
+    const headed: string[] = [];
     await inWorld(source, async (world) => {
         await seedEdits(world);
         for (const [index, ids] of batches.entries()) {
@@ -391,12 +429,55 @@ export async function measure(source: string): Promise<Measured> {
                 });
             }
         }
+
+        // The loop ends with the user approving as is: one status line, and the header a fresh
+        // session reads from `pending`.
+        await seedVerdict(world, "approved", await unresolvedIds(world));
+        const line = await cli(world, "", "watch", "doc.md", "--once");
+        statusLines.push(line);
+        ops.push({ name: "watch approved", keys: ["watch", "fullLoopTenThreads"], stdout: line });
+        const read = await cli(world, "", "pending", "doc.md");
+        headed.push(read);
+        ops.push({ name: "pending approved", keys: ["fullLoopTenThreads"], stdout: read });
+    });
+
+    // The widest status lines: a doc word beside all ten threads, then all ten handed over. A
+    // finish request leaves `reopened` out, so no line carries both. The finish pass reads every
+    // thread again, so it is a second loop and stays out of the first one's total.
+    let finishBytes = 0;
+    await inWorld(source, async (world) => {
+        await seedComments(world, allIds);
+        const status = async (name: string): Promise<number> => {
+            const line = await cli(world, "", "watch", "doc.md", "--once");
+            statusLines.push(line);
+            ops.push({ name: `watch ${name}`, keys: ["watch"], stdout: line });
+            return byteLength(line);
+        };
+        await seedVerdict(world, "dropped");
+        await status("dropped with ten threads");
+        const handed = await seedFinish(world);
+        finishBytes += await status("finish with ten threads");
+        const read = await cli(world, "", "pending", "doc.md");
+        headed.push(read);
+        finishBytes += byteLength(read);
+        for (const id of handed) {
+            const ack = await cli(world, "", "resolve", id);
+            ops.push({ name: `finish ack ${id}`, keys: ["ack"], stdout: ack });
+            finishBytes += byteLength(ack);
+        }
+        await seedVerdict(world, "approved");
+        await status("approved");
+        await seedVerdict(world, "open");
+        await status("reopened");
     });
 
     return {
         ops,
         pendingBytes: { json: byteLength(json), text: byteLength(full.stdout) },
         lines,
+        statusLines,
+        headed,
+        finishBytes,
         cellThreads: threadBlocks.filter((block) => block.includes("\n  header: ")).length,
     };
 }
@@ -420,6 +501,7 @@ export interface Report {
     rows: Row[];
     breached: boolean;
     pendingBytes: Measured["pendingBytes"];
+    finishBytes: number;
     shape: SampleShape;
 }
 
@@ -507,6 +589,7 @@ export function report(
         rows,
         breached: rows.some((row) => row.over),
         pendingBytes: measured.pendingBytes,
+        finishBytes: measured.finishBytes,
         shape: shape(source),
     };
 }
@@ -554,6 +637,7 @@ async function main(): Promise<void> {
     console.log(
         `pending --json ${json} B, plain text ${text} B (${text <= json ? "text" : "json"} smaller)`,
     );
+    console.log(`finish pass, ten threads ${result.finishBytes} B`);
     console.log(
         `shape: ${Object.entries(result.shape)
             .map(([key, value]) => `${key}=${value}`)

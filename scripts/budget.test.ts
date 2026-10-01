@@ -47,6 +47,37 @@ describe("budget on the public sample", () => {
         expect(measured.ops.filter((op) => op.name.startsWith("pending batch"))).toHaveLength(3);
     });
 
+    test("the doc's status is measured: every watch word and the pending header", () => {
+        const ids = Array.from({ length: 10 }, (_, index) => ` c${index + 1}`).join("");
+        expect(measured.statusLines).toEqual([
+            "approved\n",
+            `dropped | new${ids}\n`,
+            `finish${ids}\n`,
+            "approved\n",
+            "reopened\n",
+        ]);
+        const status = measured.ops.filter((op) => /^watch (?!batch)/.test(op.name));
+        expect(status.map((op) => op.stdout)).toEqual(measured.statusLines);
+        for (const op of status) expect(op.keys).toContain("watch");
+        expect(measured.headed.map((read) => read.slice(0, read.indexOf("\n")))).toEqual([
+            "approved",
+            "finish",
+        ]);
+        // The approval ends the loop, so its line and header count toward the loop's total.
+        expect(measured.ops.find((op) => op.name === "pending approved")).toMatchObject({
+            keys: ["fullLoopTenThreads"],
+            stdout: "approved\n",
+        });
+        expect(measured.ops.filter((op) => op.name.startsWith("finish ack"))).toHaveLength(10);
+        expect(measured.finishBytes).toBeGreaterThan(0);
+    });
+
+    test("a status line over the watch ceiling breaches it", () => {
+        const widest = Math.max(...measured.statusLines.map((line) => line.length));
+        const result = report(measured, publicSource, { ...defaultCeilings, watch: widest - 1 });
+        expect(result.rows.filter((row) => row.over).map((row) => row.key)).toEqual(["watch"]);
+    });
+
     test("user edits ride along with the first pending only", () => {
         const reads = measured.ops.filter((op) => op.name.startsWith("pending batch"));
         expect(reads.map((op) => op.stdout.includes("\nedit L"))).toEqual([true, false, false]);
