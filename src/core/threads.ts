@@ -373,6 +373,10 @@ function applyEventBody(state: DocState, event: Event): void {
             }
             break;
         case "verdict": {
+            // User only: a verdict signed by anyone else changes nothing.
+            if (event.by !== "user") {
+                break;
+            }
             const closed = new Set(event.closed);
             for (const id of closed) {
                 const thread = state.threads.get(id);
@@ -403,6 +407,9 @@ function applyEventBody(state: DocState, event: Event): void {
             break;
         }
         case "finish":
+            if (event.by !== "user") {
+                break;
+            }
             for (const id of event.ids) {
                 const thread = state.threads.get(id);
                 if (thread && isUnresolved(thread)) {

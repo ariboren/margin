@@ -987,6 +987,23 @@ describe("doc verdict", () => {
         });
     });
 
+    test("a verdict the agent signed is ignored: nothing is closed and the status stands", () => {
+        const forged: EventInput = {
+            type: "verdict",
+            by: "agent",
+            state: "approved",
+            hash: "h9",
+            closed: ["c1"],
+        };
+        const open = foldLog(log(comment("c1"), forged));
+        expect(open.verdict).toBeUndefined();
+        expect(thread(open, "c1").state).toBe("open");
+        expect(open.version).toBe(2);
+
+        const dropped = foldLog(log(comment("c1"), drop, { ...forged, state: "open" }));
+        expect(dropped.verdict).toMatchObject({ state: "dropped", seq: 2, hash: "h1" });
+    });
+
     test("any state follows any other, and the later verdict replaces the note and hash", () => {
         const state = foldLog(
             log(
@@ -1194,6 +1211,16 @@ describe("doc verdict", () => {
             });
             expect(finishRemaining(state)).toEqual(["c1", "c2", "c3"]);
             expect(state.verdict).toBeUndefined();
+        });
+
+        test("a finish the agent signed is ignored: drafts stay held and no request stands", () => {
+            const state = foldLog(
+                log(comment("c1", true), approve(), { type: "finish", by: "agent", ids: ["c1"] }),
+            );
+            expect(thread(state, "c1").state).toBe("draft");
+            expect(state.finish).toBeUndefined();
+            expect(finishRemaining(state)).toEqual([]);
+            expect(state.verdict).toMatchObject({ state: "approved" });
         });
 
         test("is outstanding until every thread is resolved or deleted", () => {
