@@ -72,13 +72,15 @@ export function sessionTitle(env: Env): string | undefined {
     if (sessionId === undefined || !SESSION_ID.test(sessionId)) return undefined;
     const tail = transcriptTail(env, sessionId);
     if (tail === undefined) return undefined;
-    const lines = tail.split("\n");
-    let aiTitle: string | undefined;
-    for (let index = lines.length - 1; index >= 0; index--) {
-        const line = lines[index]!;
-        const custom = titleField(line, "custom-title", "customTitle");
-        if (custom !== undefined) return custom;
-        aiTitle ??= titleField(line, "ai-title", "aiTitle");
-    }
-    return aiTitle;
+    const lines = tail.split("\n").reverse();
+    const latest = (type: string, field: string): string | undefined => {
+        for (const line of lines) {
+            const title = titleField(line, type, field);
+            if (title !== undefined) return title;
+        }
+        return undefined;
+    };
+    const custom = latest("custom-title", "customTitle");
+    // A blank custom title is one the user cleared.
+    return custom?.trim() ? custom : latest("ai-title", "aiTitle");
 }

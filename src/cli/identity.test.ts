@@ -74,6 +74,15 @@ describe("Claude Code session title", () => {
         expect(resolveAgent({ env }).name).toBe("margin foreman");
     });
 
+    test("a cleared custom title gives the AI title back", () => {
+        const env = claudeEnv([
+            { type: "custom-title", customTitle: "margin foreman", sessionId },
+            { type: "ai-title", aiTitle: "Margin theme review", sessionId },
+            { type: "custom-title", customTitle: "", sessionId },
+        ]);
+        expect(resolveAgent({ env }).name).toBe("Margin theme review");
+    });
+
     test("--as and MARGIN_AGENT still come first", () => {
         const env = claudeEnv([{ type: "ai-title", aiTitle: "Margin theme review", sessionId }], {
             MARGIN_AGENT: "reviewer",
