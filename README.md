@@ -93,7 +93,7 @@ margin watch review.md --as foreman
 MARGIN_AGENT=reviewer margin pending review.md
 ```
 
-The chip is green while an agent is watching, amber when none is or a reply has stalled, and red if the page loses the daemon. With no agent connected, click it to copy a message that tells your agent to start watching the doc. The browser tab carries the same state as a coloured dot, which turns blue when a reply lands while you're in another tab, and the title counts them, as in "(2) review.md · margin".
+The chip is green while an agent is watching, amber when none is or a reply has stalled, and red if the page loses the daemon. When an agent opens the doc itself, the chip names it in plain grey with "Connecting" until it starts watching, for up to a minute. With no agent connected, click it to copy a message that tells your agent to start watching the doc. The browser tab carries the same state as a coloured dot, which turns blue when a reply lands while you're in another tab, and the title counts them, as in "(2) review.md · margin".
 
 **The loop.** Claude Code runs `margin watch` under its Monitor tool. It prints one line per batch of new comments. Agents without Monitor run `margin pending <doc> --wait` instead, which blocks until the next batch arrives.
 
@@ -140,7 +140,7 @@ Comments are stored in a `.margin/` directory next to the doc: `.margin/<doc>.js
 .margin/
 ```
 
-One background daemon serves every doc you open, one doc per tab. `margin <doc>` starts it or reuses the one already running, opens the tab at a readable address such as `http://127.0.0.1:<port>/d/212a0553/review.md`, prints its URL and exits. The daemon exits by itself after 30 minutes with no tabs open. Inside Orca the tab opens in Orca's built-in browser; anywhere else it opens in your default browser.
+One background daemon serves every doc you open, one doc per tab. `margin <doc>` starts it or reuses the one already running, opens the tab at a readable address such as `http://127.0.0.1:<port>/d/212a0553/review.md`, prints its URL and exits. The daemon exits by itself about five seconds after the last tab closes, or after 30 minutes if no tab has opened. Inside Orca the tab opens in Orca's built-in browser; anywhere else it opens in your default browser.
 
 ```sh
 margin status    # daemon pid and port, then each open doc and its tab count
