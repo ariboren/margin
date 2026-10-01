@@ -66,7 +66,7 @@ export function wakeReason(event: Event, state: DocState): WakeReason | undefine
         case "reject":
             return event.note ? "rejected" : undefined;
         case "finish":
-            return "finish";
+            return event.by === "user" ? "finish" : undefined;
         default:
             return undefined;
     }
@@ -78,7 +78,11 @@ export function wakeReason(event: Event, state: DocState): WakeReason | undefine
  * `state` folded past the event only the one that set the standing status still reads as a reopen.
  */
 export function docWake(event: Event, state: DocState): WakeReason | undefined {
-    if (event.type === "verdict") return event.state === "open" ? "reopened" : event.state;
+    if (event.type === "verdict") {
+        // The fold ignores one the user did not sign, so it changed nothing to wake for.
+        if (event.by !== "user") return undefined;
+        return event.state === "open" ? "reopened" : event.state;
+    }
     const { verdict } = state;
     return verdict?.state === "open" && verdict.seq === event.seq ? "reopened" : undefined;
 }

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { readLog } from "../core/log.ts";
-import type { Event } from "../core/model.ts";
+import type { Event, EventInput } from "../core/model.ts";
 import { foldLog } from "../core/threads.ts";
 import { sandbox, type Sandbox } from "./testing.ts";
 import { DEBOUNCE_MS, docWake, emitWatch, wakeReason, watch } from "./watch.ts";
@@ -146,6 +146,19 @@ async function emitted(): Promise<string> {
     return out.lines.join("");
 }
 
+/** What a running `watch` prints for `input`, given time to settle. */
+async function watchedQuietly(input: EventInput): Promise<string[]> {
+    const stop = new AbortController();
+    const out = collect();
+    const running = watch(box.doc, out.write, { signal: stop.signal, debounceMs: 0 });
+    await Bun.sleep(200);
+    await box.append(input);
+    await Bun.sleep(500);
+    stop.abort();
+    await running;
+    return out.lines;
+}
+
 describe("doc status", () => {
     const approve = { type: "verdict", by: "user", state: "approved", hash: "h" } as const;
     const drop = { type: "verdict", by: "user", state: "dropped", hash: "h" } as const;
@@ -252,6 +265,28 @@ describe("doc status", () => {
             { ...approve, closed: [next] },
         );
         expect(await emitted()).toBe("approved\n");
+    });
+
+    test("a verdict the user did not sign wakes nothing and prints nothing", async () => {
+        await box.append({ ...approve, by: "agent" });
+        const log = await events();
+        expect(docWake(log[0]!, foldLog(log))).toBeUndefined();
+        expect(wakeReason(log[0]!, foldLog(log))).toBeUndefined();
+        expect(await emitted()).toBe("");
+        expect(await events()).toHaveLength(1);
+        expect(await watchedQuietly({ ...drop, by: "agent" })).toEqual([]);
+    });
+
+    test("a finish the user did not sign wakes nothing and prints nothing", async () => {
+        const id = await box.comment("cold path", "Why?");
+        await emitted();
+        await box.append({ type: "finish", by: "agent", ids: [id] });
+        const log = await events();
+        expect(wakeReason(log.at(-1)!, foldLog(log))).toBeUndefined();
+        expect(docWake(log.at(-1)!, foldLog(log))).toBeUndefined();
+        expect(await emitted()).toBe("");
+        expect((await events()).at(-1)).toMatchObject({ type: "finish" });
+        expect(await watchedQuietly({ type: "finish", by: "agent", ids: [id] })).toEqual([]);
     });
 
     test("a verdict and a finish each end a waiting watch", async () => {

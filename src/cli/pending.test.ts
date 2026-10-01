@@ -418,6 +418,31 @@ describe("pending --wait", () => {
         expect(await waiting).toBe(false);
         expect(out).toBe("");
     });
+
+    test("a verdict or a finish the user did not sign leaves it blocked", async () => {
+        const id = await box.comment("cold path", "A");
+        await read();
+        const steps: EventInput[] = [
+            { type: "verdict", by: "agent", state: "approved", hash: "h", closed: [id] },
+            { type: "finish", by: "agent", ids: [id] },
+        ];
+        for (const input of steps) {
+            const stop = new AbortController();
+            let out = "";
+            const waiting = pendingWait(box.doc, {
+                debounceMs: 0,
+                signal: stop.signal,
+                write: (chunk) => (out += chunk),
+            });
+            await Bun.sleep(300);
+            await box.append(input);
+            await Bun.sleep(400);
+            stop.abort();
+            expect(await waiting).toBe(false);
+            expect(out).toBe("");
+        }
+        expect((await read()).review).toBeUndefined();
+    });
 });
 
 describe("deleted threads", () => {
