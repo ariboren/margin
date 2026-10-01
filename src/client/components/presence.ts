@@ -11,6 +11,8 @@ export const SEEN_MS = 15 * 60_000;
 export interface PresenceReading {
     /** The daemon's list; undefined where there is no daemon. */
     agents: AgentIdentity[] | undefined;
+    /** The agent that opened the doc, while the daemon still waits for its watcher. */
+    expected?: AgentIdentity | undefined;
     /** Last claim or cursor, the fallback reading. */
     seenAt: IsoTime | undefined;
     connection: Connection;
@@ -27,6 +29,8 @@ export interface PresenceState {
     present: AgentIdentity[];
     /** Agents seen earlier and not present now, with when they left; latest last. */
     departed: Departure[];
+    /** The agent on its way: it opened the doc and no watcher has arrived. Never set with `present`. */
+    expected: AgentIdentity | undefined;
     everWatching: boolean;
     loadedAt: number;
 }
@@ -40,12 +44,25 @@ export function agentsFrom(reading: PresenceReading, now: number): AgentIdentity
     return seen ? [UNKNOWN_AGENT] : [];
 }
 
+/** The daemon drops it once a watcher is here; the page holds the same line for an older reading. */
+function expectedFrom(
+    reading: PresenceReading,
+    present: AgentIdentity[],
+): AgentIdentity | undefined {
+    return present.length > 0 ? undefined : reading.expected;
+}
+
+function sameExpected(a: AgentIdentity | undefined, b: AgentIdentity | undefined): boolean {
+    return a === undefined || b === undefined ? a === b : agentKey(a) === agentKey(b);
+}
+
 export function initialPresence(reading: PresenceReading, now: number): PresenceState {
     const present = agentsFrom(reading, now);
     return {
         connection: reading.connection,
         present,
         departed: [],
+        expected: expectedFrom(reading, present),
         everWatching: present.length > 0,
         loadedAt: now,
     };
@@ -65,7 +82,12 @@ export function updatePresence(
     now: number,
 ): PresenceState {
     const present = agentsFrom(reading, now);
-    if (sameAgents(present, state.present) && reading.connection === state.connection) {
+    const expected = expectedFrom(reading, present);
+    if (
+        sameAgents(present, state.present) &&
+        sameExpected(expected, state.expected) &&
+        reading.connection === state.connection
+    ) {
         return state;
     }
     const presentKeys = new Set(present.map(agentKey));
@@ -79,6 +101,7 @@ export function updatePresence(
         connection: reading.connection,
         present,
         departed,
+        expected,
         everWatching: state.everWatching || present.length > 0,
         loadedAt: state.loadedAt,
     };
@@ -100,10 +123,21 @@ export function inGrace(state: PresenceState, now: number): boolean {
     return state.present.length === 0 && state.everWatching && !announcedAbsence(state, now);
 }
 
-/** The agents the page should show: those here, or during grace and after, those last seen. */
-export function shownAgents(state: PresenceState): AgentIdentity[] {
+/** Nobody is here or just left, and the agent that opened the doc is on its way. */
+export function connecting(state: PresenceState, now: number): boolean {
+    return state.present.length === 0 && state.expected !== undefined && !inGrace(state, now);
+}
+
+/**
+ * The agents the page should show: those here; during grace, those last seen; then the one on
+ * its way; and with none, those last seen.
+ */
+export function shownAgents(state: PresenceState, now: number): AgentIdentity[] {
     if (state.present.length > 0) {
         return state.present;
+    }
+    if (state.expected !== undefined && connecting(state, now)) {
+        return [state.expected];
     }
     return state.departed.map((d) => d.agent);
 }

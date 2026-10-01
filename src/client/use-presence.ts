@@ -39,13 +39,15 @@ function useDeadline(deadline: number | null): void {
 export function usePresence(store: DocStore, snapshot: ClientSnapshot): PresenceView {
     const status = useStoreStatus(store);
     const { connection } = status;
-    const { agents, agentSeenAt: seenAt } = snapshot;
+    const { agents, expected, agentSeenAt: seenAt } = snapshot;
     const [state, setState] = useState(() =>
-        initialPresence({ agents, seenAt, connection }, Date.now()),
+        initialPresence({ agents, expected, seenAt, connection }, Date.now()),
     );
     useEffect(() => {
-        setState((current) => updatePresence(current, { agents, seenAt, connection }, Date.now()));
-    }, [agents, seenAt, connection]);
+        setState((current) =>
+            updatePresence(current, { agents, expected, seenAt, connection }, Date.now()),
+        );
+    }, [agents, expected, seenAt, connection]);
     const clock = Date.now();
     useDeadline(nextPresenceDeadline(state, clock));
     return { state, status, clock };

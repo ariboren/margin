@@ -313,6 +313,37 @@ describe("page boot data", () => {
     });
 });
 
+/** A tab's event stream, one pushed snapshot per `next()`. */
+async function snapshotStream(from: MarginServer, docId: string) {
+    const abort = new AbortController();
+    const response = await fetch(`${from.origin}${routes.events(docId)}?t=${from.token}`, {
+        signal: abort.signal,
+    });
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const next = async (): Promise<WireSnapshot> => {
+        while (true) {
+            const end = buffer.indexOf("\n\n");
+            if (end >= 0) {
+                const block = buffer.slice(0, end);
+                buffer = buffer.slice(end + 2);
+                const data = block.split("\n").find((line) => line.startsWith("data: "));
+                if (data) {
+                    return JSON.parse(data.slice("data: ".length)) as WireSnapshot;
+                }
+                continue;
+            }
+            const { value, done } = await reader.read();
+            if (done) {
+                throw new Error("stream ended");
+            }
+            buffer += decoder.decode(value, { stream: true });
+        }
+    };
+    return { next, abort };
+}
+
 describe("agent presence", () => {
     test("the snapshot says whether a watcher holds the presence file", async () => {
         const { docId } = await server.register(docPath("edge-nonl.md"));
@@ -327,30 +358,7 @@ describe("agent presence", () => {
 
     test("a presence change is pushed to open tabs without any log event", async () => {
         const { docId } = await server.register(docPath("edge-nonl.md"));
-        const abort = new AbortController();
-        const response = await fetch(withToken(routes.events(docId)), { signal: abort.signal });
-        const reader = response.body!.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        const next = async (): Promise<WireSnapshot> => {
-            while (true) {
-                const end = buffer.indexOf("\n\n");
-                if (end >= 0) {
-                    const block = buffer.slice(0, end);
-                    buffer = buffer.slice(end + 2);
-                    const data = block.split("\n").find((line) => line.startsWith("data: "));
-                    if (data) {
-                        return JSON.parse(data.slice("data: ".length)) as WireSnapshot;
-                    }
-                    continue;
-                }
-                const { value, done } = await reader.read();
-                if (done) {
-                    throw new Error("stream ended");
-                }
-                buffer += decoder.decode(value, { stream: true });
-            }
-        };
+        const { next, abort } = await snapshotStream(server, docId);
         const first = await next();
         expect(first.agents).toEqual([]);
         await withPresence(docPath("edge-nonl.md"), FOREMAN, async () => {
@@ -360,6 +368,115 @@ describe("agent presence", () => {
         });
         expect((await next()).agents).toEqual([]);
         abort.abort();
+    });
+});
+
+describe("the agent that opened the doc", () => {
+    const REVIEWER = { name: "reviewer", client: "codex" } as const;
+    let waiting: MarginServer;
+    let count = 0;
+
+    beforeAll(async () => {
+        waiting = await startServer({ expectedMs: 60_000 });
+    });
+    afterAll(async () => {
+        await waiting.stop();
+    });
+
+    const fresh = (): string => {
+        const path = join(root, "repo", "docs", `expected-${++count}.md`);
+        writeFileSync(path, "# Expected\n");
+        return path;
+    };
+    const snapshotOf = async (from: MarginServer, docId: string) =>
+        (await (
+            await fetch(`${from.origin}${routes.snapshot(docId)}?t=${from.token}`)
+        ).json()) as WireSnapshot;
+
+    test("a person's open expects nobody; an agent's open names the agent", async () => {
+        const path = fresh();
+        const { docId } = await waiting.register(path);
+        const first = await snapshotOf(waiting, docId);
+        expect(first.agents).toEqual([]);
+        expect("expected" in first).toBe(false);
+
+        await waiting.register(path, FOREMAN);
+        expect(await snapshotOf(waiting, docId)).toMatchObject({ agents: [], expected: FOREMAN });
+    });
+
+    test("a person's later open leaves it; another agent's open replaces it", async () => {
+        const path = fresh();
+        const { docId } = await waiting.register(path, FOREMAN);
+        await waiting.register(path);
+        expect((await snapshotOf(waiting, docId)).expected).toEqual(FOREMAN);
+        await waiting.register(path, REVIEWER);
+        expect((await snapshotOf(waiting, docId)).expected).toEqual(REVIEWER);
+    });
+
+    test("any watcher arriving ends the wait for good", async () => {
+        const path = fresh();
+        const { docId } = await waiting.register(path, FOREMAN);
+        await withPresence(path, REVIEWER, async () => {
+            const during = await snapshotOf(waiting, docId);
+            expect(during.agents).toEqual([REVIEWER]);
+            expect("expected" in during).toBe(false);
+        });
+        const after = await snapshotOf(waiting, docId);
+        expect(after.agents).toEqual([]);
+        expect("expected" in after).toBe(false);
+    });
+
+    test("an open while a watcher is connected expects nobody, also once it leaves", async () => {
+        const path = fresh();
+        const { docId } = await waiting.register(path);
+        await withPresence(path, FOREMAN, async () => {
+            await waiting.register(path, FOREMAN);
+            expect("expected" in (await snapshotOf(waiting, docId))).toBe(false);
+        });
+        const after = await snapshotOf(waiting, docId);
+        expect(after.agents).toEqual([]);
+        expect("expected" in after).toBe(false);
+    });
+
+    test("the register route takes the agent and trusts none of it", async () => {
+        const path = fresh();
+        const post = async (body: unknown) =>
+            (await (
+                await fetch(`${waiting.origin}${routes.register}`, {
+                    method: "POST",
+                    headers: {
+                        authorization: `Bearer ${waiting.token}`,
+                        origin: waiting.origin,
+                        "content-type": "application/json",
+                    },
+                    body: JSON.stringify(body),
+                })
+            ).json()) as { docId: string };
+        const { docId } = await post({ path, agent: FOREMAN });
+        expect((await snapshotOf(waiting, docId)).expected).toEqual(FOREMAN);
+        await post({ path, agent: { name: 7, client: "<script>" } });
+        expect((await snapshotOf(waiting, docId)).expected).toEqual({
+            name: "Agent",
+            client: "unknown",
+        });
+    });
+
+    test("the wait running out is pushed to open tabs and the agent is gone", async () => {
+        const brief = await startServer({ expectedMs: 300 });
+        try {
+            const path = fresh();
+            const { docId } = await brief.register(path, FOREMAN);
+            const { next, abort } = await snapshotStream(brief, docId);
+            const first = await next();
+            expect(first.expected).toEqual(FOREMAN);
+            const pushed = await next();
+            expect(pushed.agents).toEqual([]);
+            expect("expected" in pushed).toBe(false);
+            expect(pushed.version).toBe(first.version);
+            abort.abort();
+        } finally {
+            await brief.stop();
+        }
     });
 });
 

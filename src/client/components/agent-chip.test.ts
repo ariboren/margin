@@ -71,6 +71,57 @@ describe("agentChipFor", () => {
         ]);
     });
 
+    test("connecting: the agent that opened the doc, named, with no copy remedy", () => {
+        const state = initialPresence({ ...reading([]), expected: foreman }, T0);
+        const model = agentChipFor(state, [], T0);
+        expect(model).toMatchObject({
+            kind: "connecting",
+            label: "foreman",
+            extra: 0,
+            agents: [foreman],
+        });
+        expect(chipTipLines(model)).toEqual([
+            "foreman · Claude Code",
+            "Connecting. Waiting for this agent to start watching.",
+        ]);
+        expect(chipStatusLine(model)).toBe("foreman connecting");
+    });
+
+    test("connecting is not watching: a thread just handed over gets no eager label", () => {
+        // app.tsx reads "an agent is watching" as this model's kind being connected.
+        const state = initialPresence({ ...reading([]), expected: foreman }, T0);
+        expect(agentChipFor(state, [], T0).kind).not.toBe("connected");
+        expect(agentChipFor(state, ["c3"], T0).kind).toBe("connecting");
+    });
+
+    test("connecting becomes connected with the watcher, none when the wait runs out", () => {
+        const state = initialPresence({ ...reading([]), expected: foreman }, T0);
+        const arrived = updatePresence(state, reading([foreman]), T0 + 4_000);
+        expect(agentChipFor(arrived, [], T0 + 4_000)).toMatchObject({
+            kind: "connected",
+            label: "foreman",
+        });
+        const lapsed = updatePresence(state, reading([]), T0 + 60_000);
+        expect(agentChipFor(lapsed, [], T0 + 60_000)).toMatchObject({
+            kind: "none",
+            label: "No agent",
+        });
+    });
+
+    test("connecting waits out the grace period of a watcher that just left", () => {
+        let state = initialPresence(reading([reviewer]), T0);
+        state = updatePresence(state, { ...reading([]), expected: foreman }, T0 + 60_000);
+        const due = T0 + 60_000 + DISCONNECT_MS;
+        expect(agentChipFor(state, [], due - 1)).toMatchObject({
+            kind: "connected",
+            label: "reviewer",
+        });
+        expect(agentChipFor(state, [], due)).toMatchObject({
+            kind: "connecting",
+            label: "foreman",
+        });
+    });
+
     test("the daemon away freezes the last state", () => {
         let state = initialPresence(reading([foreman]), T0);
         state = updatePresence(state, reading([foreman], "lost" as never), T0 + 1_000);

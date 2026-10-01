@@ -37,7 +37,11 @@ import type { ThreadActions } from "./undo.ts";
 
 /** What the page adds to `DocSnapshot`: presence read by the daemon, not folded from the log. */
 /** The daemon's snapshot plus its presence reading; absent in a store with no daemon. */
-export type ClientSnapshot = DocSnapshot & { agents?: AgentIdentity[] };
+export type ClientSnapshot = DocSnapshot & {
+    agents?: AgentIdentity[];
+    /** The agent that opened the doc and has yet to start watching it. */
+    expected?: AgentIdentity;
+};
 
 export interface Transport {
     fetchSnapshot(): Promise<WireSnapshot>;
@@ -414,6 +418,7 @@ export class ServerStore implements DocStore {
             missing: wire.missing,
             version: wire.version,
             agents: wire.agents,
+            expected: wire.expected,
             verdict: wire.verdict,
             finish: wire.finish,
         };

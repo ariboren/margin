@@ -3,7 +3,9 @@
 import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { signed } from "../core/agent.ts";
 import { withLock } from "../core/lock.ts";
+import type { AgentIdentity } from "../core/model.ts";
 import { isFile } from "./doc-location.ts";
 import { openTab, type Env, type Opener } from "./open-tab.ts";
 import {
@@ -21,6 +23,7 @@ import {
     routes,
     type DaemonStatus,
     type ErrorBody,
+    type RegisterRequest,
     type RegisterResponse,
 } from "./protocol.ts";
 
@@ -50,6 +53,8 @@ export interface OpenDocOptions {
      * agent rerunning the command to check it worked would otherwise stack up tabs).
      */
     reuseTab?: boolean;
+    /** The agent running the open; the page shows it as connecting until its watcher arrives. */
+    agent?: AgentIdentity;
     env?: Env;
 }
 
@@ -79,16 +84,16 @@ export async function openDoc(
     }
     const paths = statePaths(ensureStateDir(stateDir(env)));
     let spawned = false;
-    let registered = await tryRegister(readDaemonInfo(paths.info), path);
+    let registered = await tryRegister(readDaemonInfo(paths.info), path, options.agent);
     if (!registered) {
         registered = await withLock(paths.spawnLock, async () => {
-            const existing = await tryRegister(readDaemonInfo(paths.info), path);
+            const existing = await tryRegister(readDaemonInfo(paths.info), path, options.agent);
             if (existing) {
                 return existing;
             }
             const info = await spawnDaemon(paths, env);
             spawned = true;
-            const fresh = await tryRegister(info, path);
+            const fresh = await tryRegister(info, path, options.agent);
             if (!fresh) {
                 throw new DaemonStartError(paths.log);
             }
@@ -140,6 +145,7 @@ export async function daemonStatus(options: { env?: Env } = {}): Promise<DaemonS
 async function tryRegister(
     info: DaemonInfo | null,
     path: string,
+    agent: AgentIdentity | undefined,
 ): Promise<RegisterResponse | null> {
     if (!info) {
         return null;
@@ -151,7 +157,7 @@ async function tryRegister(
     }
     const response = await request(info, routes.register, {
         method: "POST",
-        body: JSON.stringify({ path }),
+        body: JSON.stringify({ path, ...signed(agent) } satisfies RegisterRequest),
     });
     if (!response) {
         return null;

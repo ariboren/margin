@@ -89,6 +89,11 @@ export interface WireSnapshot {
      * session snapshot.
      */
     agents?: AgentIdentity[];
+    /**
+     * The agent whose `margin <doc>` opened this doc and whose watcher has not arrived yet. Gone
+     * once any watcher is here or `EXPECTED_MS` has passed, and from a daemon older than the field.
+     */
+    expected?: AgentIdentity;
     /** Absent until the first verdict (the doc is open), and from a daemon older than the field. */
     verdict?: DocVerdict;
     /** The last finish request since the last verdict, outstanding or done. */
@@ -265,6 +270,8 @@ export interface OpenUrlResponse {
 
 export interface RegisterRequest {
     path: string;
+    /** Who ran the open, when an agent did. A daemon older than the field ignores it. */
+    agent?: AgentIdentity;
 }
 
 export interface RegisterResponse {

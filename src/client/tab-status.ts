@@ -11,14 +11,19 @@ export interface TabInput {
     unread: number;
 }
 
-/** News beats standing; the daemon link beats the agent. */
-export function dotFor(input: TabInput): Dot {
+/**
+ * News beats standing; the daemon link beats the agent. No colour (the neutral dot) while the
+ * agent that opened the doc is on its way: it is neither here nor missing.
+ */
+export function dotFor(input: TabInput): Dot | null {
     if (input.unread > 0) return "accent";
     switch (input.kind) {
         case "offline":
             return "err";
         case "connected":
             return "ok";
+        case "connecting":
+            return null;
         default:
             return "warn";
     }

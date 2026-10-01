@@ -25,6 +25,12 @@ describe("dotFor", () => {
             expect(dotFor({ kind, unread: 0 })).toBe("warn");
         }
     });
+
+    test("an agent on its way gets the neutral dot, and news still wins", () => {
+        expect(dotFor({ kind: "connecting", unread: 0 })).toBeNull();
+        expect(dotFor({ kind: "connecting", unread: 1 })).toBe("accent");
+        expect(tabStatus({ kind: "connecting", unread: 0 }, "doc.md").href).toBe(faviconHref(null));
+    });
 });
 
 describe("title", () => {

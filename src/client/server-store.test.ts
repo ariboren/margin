@@ -158,6 +158,14 @@ describe("ServerStore", () => {
         expect(store.snapshot().finish).toEqual(finish);
     });
 
+    test("passes the agent on its way through, absent when the daemon sends none", () => {
+        const fake = fakeTransport(wire(3));
+        const store = new ServerStore(fake.transport, wire(3));
+        expect(store.snapshot().expected).toBeUndefined();
+        fake.push(wire(3, SOURCE, { expected: FOREMAN }));
+        expect(store.snapshot().expected).toEqual(FOREMAN);
+    });
+
     test("parses the pushed source and passes presence through", () => {
         const fake = fakeTransport(wire(3, SOURCE, { agents: [FOREMAN] }));
         const store = new ServerStore(fake.transport, wire(3, SOURCE, { agents: [FOREMAN] }));

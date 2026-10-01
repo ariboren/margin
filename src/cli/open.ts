@@ -6,14 +6,33 @@ import {
     openDoc,
     stopDaemon,
 } from "../server/api.ts";
+import { UNKNOWN_AGENT, agentKey, signed } from "../core/agent.ts";
+import type { AgentIdentity } from "../core/model.ts";
+import { resolveAgent } from "./identity.ts";
 import type { Io, ServerCommands } from "./main.ts";
 import { recordDoc } from "./registry.ts";
+
+/**
+ * Who the page should expect a watcher from: the agent that ran the open. A person at a terminal
+ * is nobody, and so is a pipe or script that no client marker or `MARGIN_AGENT` names.
+ */
+export function openingAgent(io: Pick<Io, "env" | "isTTY">): AgentIdentity | undefined {
+    if (io.isTTY) {
+        return undefined;
+    }
+    const agent = resolveAgent({ env: io.env });
+    return agentKey(agent) === agentKey(UNKNOWN_AGENT) ? undefined : agent;
+}
 
 export const serverCommands: ServerCommands = {
     async open(docPath, io) {
         try {
             // A person at a terminal asked for a tab; an agent's rerun is a check, not a request.
-            const result = await openDoc(docPath, { env: io.env, reuseTab: !io.isTTY });
+            const result = await openDoc(docPath, {
+                env: io.env,
+                reuseTab: !io.isTTY,
+                ...signed(openingAgent(io)),
+            });
             await recordDoc(docPath, io.env);
             io.write(`${result.url}\n`);
             return 0;

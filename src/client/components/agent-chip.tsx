@@ -6,7 +6,7 @@ import { copyText } from "../clipboard.ts";
 import { reducedMotion } from "../motion.ts";
 import { AgentMark } from "./agent-marks.tsx";
 import type { DocLocation } from "./doc-name.tsx";
-import { inGrace, shownAgents, type PresenceState } from "./presence.ts";
+import { connecting, inGrace, shownAgents, type PresenceState } from "./presence.ts";
 import { Tooltip } from "./tooltip.tsx";
 
 /** How long the copied confirmation shows. */
@@ -21,6 +21,8 @@ export type AgentChipKind =
     | "connected"
     /** Here, but a working thread has gone quiet. */
     | "stalled"
+    /** The agent that opened the doc has not started watching it yet. */
+    | "connecting"
     /** Every agent that was here has been gone past the grace period. */
     | "disconnected"
     /** No agent has been here since the page loaded. */
@@ -43,7 +45,7 @@ export function agentChipFor(
     stalled: ThreadId[],
     now: number,
 ): AgentChipModel {
-    const agents = shownAgents(state);
+    const agents = shownAgents(state, now);
     const label = agents[0]?.name ?? "No agent";
     const extra = Math.max(0, agents.length - 1);
     const base = { agents, label, extra, stalled };
@@ -52,6 +54,9 @@ export function agentChipFor(
     }
     if (state.present.length > 0 || inGrace(state, now)) {
         return { ...base, kind: stalled.length > 0 ? "stalled" : "connected" };
+    }
+    if (connecting(state, now)) {
+        return { ...base, kind: "connecting" };
     }
     return { ...base, kind: state.everWatching ? "disconnected" : "none" };
 }
@@ -76,6 +81,9 @@ export function chipTipLines(model: AgentChipModel): string[] {
     switch (model.kind) {
         case "stalled":
             lines.push(`Stalled on ${model.stalled.join(", ")}`);
+            break;
+        case "connecting":
+            lines.push("Connecting. Waiting for this agent to start watching.");
             break;
         case "disconnected":
             lines.push("Agent disconnected. Click to copy a message for your agent.");
@@ -113,6 +121,8 @@ export function chipStatusLine(model: AgentChipModel): string {
             return `${who} connected`;
         case "stalled":
             return `${who} stalled on ${model.stalled.join(", ")}`;
+        case "connecting":
+            return `${who} connecting`;
         case "disconnected":
             return `${who} disconnected`;
         case "none":
@@ -148,7 +158,11 @@ export function AgentChip(props: AgentChipProps): JSX.Element {
         <>
             <AgentMark client={model.agents[0]?.client ?? "unknown"} size={14} />
             <span class="agent-chip-name">{model.label}</span>
-            {model.extra > 0 ? <span class="agent-chip-extra">+{model.extra}</span> : null}
+            {model.kind === "connecting" ? (
+                <span class="agent-chip-extra">Connecting</span>
+            ) : model.extra > 0 ? (
+                <span class="agent-chip-extra">+{model.extra}</span>
+            ) : null}
         </>
     );
     const [first] = model.stalled;

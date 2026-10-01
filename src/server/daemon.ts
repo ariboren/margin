@@ -2,10 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Server } from "bun";
+import { readIdentity } from "../core/agent.ts";
 import { sidecar } from "../core/log.ts";
 import { LockTimeoutError } from "../core/lock.ts";
 import {
     isVerdictState,
+    type AgentIdentity,
     type Anchor,
     type DocSettingKey,
     type ThreadId,
@@ -70,6 +72,11 @@ export const IDLE_EXIT_MS = 30 * 60 * 1000;
 const KEEPALIVE_MS = 15_000;
 /** How often a doc with open tabs rechecks its watcher's presence file. */
 const PRESENCE_MS = 1_000;
+/**
+ * How long the agent that opened a doc is expected to start watching it: one slow agent turn
+ * between `margin <doc>` and `margin watch`. Too short and the page says "No agent" in the gap.
+ */
+const EXPECTED_MS = 60_000;
 const ROOT = join(import.meta.dir, "..", "..");
 const DEFAULT_CLIENT_DIR = join(ROOT, "dist", "client");
 
@@ -94,6 +101,8 @@ export interface ServerOptions {
     openFile?: (path: string, env: Env) => Promise<FileOpener>;
     /** Shows the doc in the file manager for `open-file` with `reveal`; defaults to `revealFile`. */
     revealFile?: (path: string, env: Env) => Promise<FileOpener>;
+    /** Overrides `EXPECTED_MS`, for tests. */
+    expectedMs?: number;
     /** `bun run dev` only: every event stream also carries a stamp that `reload()` changes. */
     dev?: boolean;
 }
@@ -102,7 +111,8 @@ export interface MarginServer {
     port: number;
     token: string;
     origin: string;
-    register(path: string): Promise<RegisterResponse>;
+    /** `agent` is who ran the open, when an agent did. */
+    register(path: string, agent?: AgentIdentity): Promise<RegisterResponse>;
     session(docId: DocId): DocSession | undefined;
     status(): DaemonStatus;
     /** Dev only: changes the stamp so every open tab reloads. A no-op without `dev`. */
@@ -114,8 +124,13 @@ interface Registered {
     session: DocSession;
     watcher: WatchHandle;
     relativePath: string;
-    /** Last presence reading pushed to this doc's tabs, as its JSON, so a poll compares bytes. */
-    agents: string;
+    /**
+     * Last presence reading pushed to this doc's tabs, as the JSON members it adds to the
+     * snapshot, so a poll compares bytes.
+     */
+    presence: string;
+    /** The agent whose open is still waiting for its watcher, and when the wait ends. */
+    expected?: { agent: AgentIdentity; until: number };
     /** One resend per open event stream, for a presence change the log never sees. */
     streams: Set<() => void>;
 }
@@ -156,7 +171,9 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
         }, wait);
     };
 
-    const register = async (path: string): Promise<RegisterResponse> => {
+    const expectedMs = options.expectedMs ?? EXPECTED_MS;
+
+    const register = async (path: string, agent?: AgentIdentity): Promise<RegisterResponse> => {
         const real = sidecar(path).doc;
         if (!isFile(real)) {
             throw new WireFailure(404, "missing", "doc not found");
@@ -185,7 +202,7 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
                         session,
                         watcher,
                         relativePath: repoRelativePath(real),
-                        agents: JSON.stringify(connectedAgents(real)),
+                        presence: "",
                         streams: new Set(),
                     };
                     docs.set(docId, entry);
@@ -195,6 +212,10 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
                 open.finally(() => opening.delete(docId)).catch(() => undefined);
             }
             await open;
+        }
+        // An agent rerunning the open while its watcher runs is not on its way; it is here.
+        if (agent && connectedAgents(real).length === 0) {
+            docs.get(docId)!.expected = { agent, until: Date.now() + expectedMs };
         }
         return {
             docId,
@@ -280,7 +301,12 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
             if (typeof body?.path !== "string") {
                 return error(400, "bad-request");
             }
-            return json(await register(body.path));
+            return json(
+                await register(
+                    body.path,
+                    body.agent === undefined ? undefined : readIdentity(body.agent),
+                ),
+            );
         }
         if (pathname === routes.status && request.method === "GET") {
             return json(status());
@@ -415,10 +441,7 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
     armIdle();
     const presence = setInterval(() => {
         for (const doc of docs.values()) {
-            if (
-                doc.streams.size > 0 &&
-                JSON.stringify(connectedAgents(doc.session.path)) !== doc.agents
-            ) {
+            if (doc.streams.size > 0 && presenceJson(doc) !== doc.presence) {
                 for (const resend of doc.streams) {
                     resend();
                 }
@@ -620,8 +643,21 @@ function error(status: number, code: WireError, detail?: string): Response {
 
 /** The session's snapshot JSON plus the presence reading, taken fresh and remembered. */
 function wireJson(doc: Registered, snapshot: string): string {
-    doc.agents = JSON.stringify(connectedAgents(doc.session.path));
-    return `${snapshot.slice(0, -1)},"agents":${doc.agents}}`;
+    doc.presence = presenceJson(doc);
+    return `${snapshot.slice(0, -1)},${doc.presence}}`;
+}
+
+/**
+ * The snapshot's presence members: who is watching and, until one is or the wait runs out, the
+ * agent expected to. The first watcher ends the wait for good, so one that leaves reads as gone.
+ */
+function presenceJson(doc: Registered): string {
+    const agents = connectedAgents(doc.session.path);
+    if (doc.expected && (agents.length > 0 || Date.now() >= doc.expected.until)) {
+        delete doc.expected;
+    }
+    const expected = doc.expected ? `,"expected":${JSON.stringify(doc.expected.agent)}` : "";
+    return `"agents":${JSON.stringify(agents)}${expected}`;
 }
 
 function events(
