@@ -1,6 +1,7 @@
 import type { JSX } from "preact";
 import { useState } from "preact/hooks";
 import { copyText } from "../clipboard.ts";
+import { Icon } from "./icons.tsx";
 
 /** Where the doc lives and how to open things from it. The host (mockup or daemon) supplies it. */
 export interface DocLocation {
@@ -61,6 +62,7 @@ export function DocName({ location }: { location: DocLocation }): JSX.Element {
                         class="button button-quiet"
                         onClick={() => openDoc(location)}
                     >
+                        <Icon name="open" />
                         Open file
                     </button>
                     {location.revealFile ? (
@@ -69,6 +71,7 @@ export function DocName({ location }: { location: DocLocation }): JSX.Element {
                             class="button button-quiet"
                             onClick={location.revealFile}
                         >
+                            <Icon name="folder" />
                             Reveal file
                         </button>
                     ) : null}
@@ -77,6 +80,7 @@ export function DocName({ location }: { location: DocLocation }): JSX.Element {
                         class="button button-quiet"
                         onClick={() => void copy("path")}
                     >
+                        <Icon name={copied === "path" ? "check" : "copy"} />
                         {copied === "path" ? "Copied" : "Copy path"}
                     </button>
                     <button
@@ -84,6 +88,7 @@ export function DocName({ location }: { location: DocLocation }): JSX.Element {
                         class="button button-quiet"
                         onClick={() => void copy("relative")}
                     >
+                        <Icon name={copied === "relative" ? "check" : "copy"} />
                         {copied === "relative" ? "Copied" : "Copy relative path"}
                     </button>
                 </span>
