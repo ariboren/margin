@@ -131,7 +131,7 @@ margin status    # daemon pid and port, then each open doc and its tab count
 margin stop
 ```
 
-Set `MARGIN_NO_OPEN=1` to print the URL without opening a tab. The daemon keeps its port and token in `~/.cache/margin`, or in `$XDG_RUNTIME_DIR/margin` when that is set.
+When an agent runs `margin <doc>` (its output is not a terminal) and a tab already shows the doc, it prints the same URL and opens no second tab; from your terminal it always opens one. Set `MARGIN_NO_OPEN=1` to print the URL without opening a tab. The daemon keeps its port and token in `~/.cache/margin`, or in `$XDG_RUNTIME_DIR/margin` when that is set.
 
 ## Token cost
 

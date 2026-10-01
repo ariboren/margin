@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { daemonStatus, DocNotFoundError, openDoc, stopDaemon } from "./api.ts";
 import { isAlive, readDaemonInfo, writeDaemonInfo } from "./paths.ts";
-import { PROTOCOL_VERSION } from "./protocol.ts";
+import { PROTOCOL_VERSION, routes, TOKEN_PARAM } from "./protocol.ts";
 
 const PUBLIC_SAMPLE = join(import.meta.dir, "..", "..", "fixtures", "public-sample.md");
 
@@ -27,6 +27,26 @@ afterEach(async () => {
 const info = () => readDaemonInfo(join(root, "state", "daemon.json"));
 
 describe("daemon lifecycle", () => {
+    test("reuseTab opens no second tab while one shows the doc", async () => {
+        const first = await openDoc(doc, { env, reuseTab: true });
+        expect(first.reusedTab).toBe(false);
+
+        const token = new URL(first.url).searchParams.get(TOKEN_PARAM);
+        const abort = new AbortController();
+        const tab = await fetch(
+            `${new URL(first.url).origin}${routes.events(first.docId)}?${TOKEN_PARAM}=${token}`,
+            { signal: abort.signal },
+        );
+        try {
+            expect(tab.status).toBe(200);
+            const again = await openDoc(doc, { env, reuseTab: true });
+            expect(again).toMatchObject({ url: first.url, opened: "none", reusedTab: true });
+            expect((await openDoc(doc, { env })).reusedTab).toBe(false);
+        } finally {
+            abort.abort();
+        }
+    });
+
     test("spawns once, then reuses; cold under 1 s, warm under 300 ms", async () => {
         let started = performance.now();
         const cold = await openDoc(doc, { env });

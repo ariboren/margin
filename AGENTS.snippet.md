@@ -2,6 +2,8 @@
 
 Generated from `margin agent-help` by `bun run skill`; edit src/cli/agent-help.md.
 
+Open a doc for the user with `margin <doc>`, once. The first line it prints is the page URL and the rest is the help below, so read it with `head -1`. Run again while the tab is open, it prints the same URL and opens no second tab.
+
 The page names you after your session, the title in your tab, so leave `--as` and `MARGIN_AGENT` off unless the user asks for another name.
 
 ```text

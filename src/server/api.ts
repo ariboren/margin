@@ -45,6 +45,11 @@ export class DaemonStartError extends Error {
 export interface OpenDocOptions {
     /** Default true. */
     openTab?: boolean;
+    /**
+     * Open no tab when one already shows the doc. For callers that cannot see the browser (an
+     * agent rerunning the command to check it worked would otherwise stack up tabs).
+     */
+    reuseTab?: boolean;
     env?: Env;
 }
 
@@ -55,6 +60,8 @@ export interface OpenDocResult {
     /** A new daemon was started for this call. */
     spawned: boolean;
     opened: Opener;
+    /** A tab already showed the doc, so `reuseTab` opened none. */
+    reusedTab: boolean;
 }
 
 /**
@@ -88,8 +95,10 @@ export async function openDoc(
             return fresh;
         });
     }
-    const opened = options.openTab === false ? "none" : await openTab(registered.url, env);
-    return { url: registered.url, docId: registered.docId, spawned, opened };
+    const reusedTab = options.reuseTab === true && (registered.clients ?? 0) > 0;
+    const opened =
+        options.openTab === false || reusedTab ? "none" : await openTab(registered.url, env);
+    return { url: registered.url, docId: registered.docId, spawned, opened, reusedTab };
 }
 
 export interface StopResult {

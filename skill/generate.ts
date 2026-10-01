@@ -18,7 +18,10 @@ type Output = keyof typeof outputs;
 const generated =
     "Generated from `margin agent-help` by `bun run skill`; edit src/cli/agent-help.md.";
 
-/** Outside the fenced help, so the agent-help byte ceiling does not pay for it. */
+/** Outside the fenced help, so the agent-help byte ceiling does not pay for them. */
+const opening =
+    "Open a doc for the user with `margin <doc>`, once. The first line it prints is the page URL and the rest is the help below, so read it with `head -1`. Run again while the tab is open, it prints the same URL and opens no second tab.";
+
 const naming =
     "The page names you after your session, the title in your tab, so leave `--as` and `MARGIN_AGENT` off unless the user asks for another name.";
 
@@ -36,6 +39,8 @@ export function render(help: string): Record<Output, string> {
             "",
             generated,
             "",
+            opening,
+            "",
             naming,
             "",
             fenced(help),
@@ -44,6 +49,8 @@ export function render(help: string): Record<Output, string> {
             "## margin (markdown review threads)",
             "",
             generated,
+            "",
+            opening,
             "",
             naming,
             "",

@@ -12,7 +12,8 @@ import { recordDoc } from "./registry.ts";
 export const serverCommands: ServerCommands = {
     async open(docPath, io) {
         try {
-            const result = await openDoc(docPath, { env: io.env });
+            // A person at a terminal asked for a tab; an agent's rerun is a check, not a request.
+            const result = await openDoc(docPath, { env: io.env, reuseTab: !io.isTTY });
             await recordDoc(docPath, io.env);
             io.write(`${result.url}\n`);
             return 0;

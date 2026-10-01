@@ -242,6 +242,8 @@ export interface RegisterResponse {
     docId: DocId;
     /** Tab URL, token included. */
     url: string;
+    /** Tabs showing this doc now. Absent from a daemon started before the field existed. */
+    clients?: number;
 }
 
 export interface DaemonStatus {

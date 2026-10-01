@@ -187,7 +187,11 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
             }
             await open;
         }
-        return { docId, url: `${origin}${pagePath(docId)}?${TOKEN_PARAM}=${token}` };
+        return {
+            docId,
+            url: `${origin}${pagePath(docId)}?${TOKEN_PARAM}=${token}`,
+            clients: docs.get(docId)?.session.clients ?? 0,
+        };
     };
 
     /** The short id, unless another open doc shares it; then the full id keeps the two apart. */
