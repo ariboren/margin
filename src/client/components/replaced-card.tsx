@@ -4,6 +4,7 @@ import { copyText } from "../clipboard.ts";
 import type { Replacement } from "../replacements.ts";
 import type { Replacements } from "../use-replacements.ts";
 import { CardHead } from "./card-head.tsx";
+import { Icon } from "./icons.tsx";
 
 /**
  * Beside a unit where "keep mine" overwrote the agent's version: shows both, puts theirs back.
@@ -58,6 +59,7 @@ export function ReplacedCard({
                         class="button button-quiet"
                         onClick={() => void copy("theirs")}
                     >
+                        <Icon name={copied === "theirs" ? "check" : "copy"} />
                         {copied === "theirs" ? "Copied" : "Copy theirs"}
                     </button>
                     <button
@@ -65,6 +67,7 @@ export function ReplacedCard({
                         class="button button-quiet"
                         onClick={() => void copy("mine")}
                     >
+                        <Icon name={copied === "mine" ? "check" : "copy"} />
                         {copied === "mine" ? "Copied" : "Copy yours"}
                     </button>
                     <span class="card-actions-end">
@@ -74,6 +77,7 @@ export function ReplacedCard({
                             disabled={busy}
                             onClick={() => replacements.dismiss(replacement)}
                         >
+                            <Icon name="close" />
                             Dismiss
                         </button>
                         {replacement.refused ? null : (
@@ -83,6 +87,7 @@ export function ReplacedCard({
                                 disabled={busy}
                                 onClick={() => void restore()}
                             >
+                                <Icon name="undo" />
                                 Restore
                             </button>
                         )}

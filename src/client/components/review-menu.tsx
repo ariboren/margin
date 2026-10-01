@@ -9,6 +9,7 @@ import {
     type ReviewModel,
     type UnresolvedKind,
 } from "../view-model.ts";
+import { Icon } from "./icons.tsx";
 
 export type ReviewTone = "open" | "approved" | "declined" | "finishing" | "ready";
 
@@ -313,7 +314,7 @@ export function ReviewMenu(props: ReviewMenuProps): JSX.Element {
                                 disabled={busy || total === 0}
                                 onClick={() => setVerdict("approved", true)}
                             >
-                                <Mark kind="check" />
+                                <Icon name="check" class="review-mark" />
                                 Close {count(total, "thread")} and approve
                             </button>
                             <button
@@ -506,27 +507,11 @@ function Path(props: {
     );
 }
 
-type MarkKind = VerdictAction["icon"];
-
-const markPaths: Record<MarkKind, string> = {
-    check: "M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5zM5.25 8.25l2 2 3.5-4",
-    slash: "M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5zM3.6 3.6l8.8 8.8",
-    reopen: "M2.75 8a5.25 5.25 0 1 0 1.7-3.85M2.5 2v3h3",
-};
-
-function Mark({ kind }: { kind: MarkKind }): JSX.Element {
-    return (
-        <svg class="review-mark" viewBox="0 0 16 16" aria-hidden="true">
-            <path d={markPaths[kind]} />
-        </svg>
-    );
-}
-
 function ToneMark({ tone }: { tone: ReviewTone }): JSX.Element {
     return tone === "finishing" ? (
         <span class="review-dot" aria-hidden="true" />
     ) : (
-        <Mark kind={tone === "declined" ? "slash" : "check"} />
+        <Icon name={tone === "declined" ? "slash" : "check"} class="review-mark" />
     );
 }
 
@@ -559,7 +544,7 @@ function VerdictButtons({
                     aria-describedby={action.disabled ? WHY_NOT_ID : undefined}
                     onClick={action.disabled ? undefined : () => onPick(action.state)}
                 >
-                    <Mark kind={action.icon} />
+                    <Icon name={action.icon} class="review-mark" />
                     {action.label}
                 </button>
             ))}

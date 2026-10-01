@@ -8,6 +8,7 @@ import { isDetached } from "../view-model.ts";
 import { AgentChip, type AgentChipModel } from "./agent-chip.tsx";
 import { DetachedAction } from "./detached-action.tsx";
 import { DocName, type DocLocation } from "./doc-name.tsx";
+import { Icon } from "./icons.tsx";
 import { RequestToast } from "./request-toast.tsx";
 import { ReviewMenu } from "./review-menu.tsx";
 import { Tooltip } from "./tooltip.tsx";
@@ -282,9 +283,7 @@ function UndoButtons({ stack }: { stack: UndoStack }): JSX.Element {
                 onMouseDown={keepFocus}
                 onClick={() => void stack.undo()}
             >
-                <svg viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="M5.5 3.5 2.5 6.5l3 3M2.5 6.5h7a4 4 0 0 1 0 8H7" />
-                </svg>
+                <Icon name="undo" />
             </IconButton>
             <IconButton
                 label={redoLabel}
@@ -292,9 +291,7 @@ function UndoButtons({ stack }: { stack: UndoStack }): JSX.Element {
                 onMouseDown={keepFocus}
                 onClick={() => void stack.redo()}
             >
-                <svg viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="M10.5 3.5l3 3-3 3M13.5 6.5h-7a4 4 0 0 0 0 8H9" />
-                </svg>
+                <Icon name="redo" />
             </IconButton>
         </span>
     );

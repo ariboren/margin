@@ -501,17 +501,6 @@
         color: var(--ink);
     }
 
-    .review-mark {
-        width: 14px;
-        height: 14px;
-        flex: none;
-        fill: none;
-        stroke: currentColor;
-        stroke-width: 1.5;
-        stroke-linecap: round;
-        stroke-linejoin: round;
-    }
-
     .review-open .review-mark {
         color: var(--muted);
     }
@@ -2429,6 +2418,17 @@
         color: var(--paper);
     }
 
+    /* The affirmative choice beside a filled primary: Resolve next to Reply. */
+    .button-accept-quiet {
+        background: transparent;
+        border-color: color-mix(in srgb, var(--ins) 70%, transparent);
+        color: var(--ins);
+    }
+
+    .button-accept-quiet:hover {
+        background: var(--ins-bg);
+    }
+
     .card-confirm {
         display: flex;
         flex-wrap: wrap;
@@ -2442,6 +2442,19 @@
         background: var(--del);
         border-color: var(--del);
         color: var(--paper);
+    }
+
+    /* On a quiet button: Delete on a card, which many cards show at rest. Red words and icon,
+       and the tint and border only once it is pointed at. */
+    .button-danger-soft,
+    .button-danger-soft:hover {
+        color: var(--del);
+    }
+
+    .button-danger-soft:hover,
+    .button-danger-soft:focus-visible {
+        background: var(--del-bg);
+        border-color: color-mix(in srgb, var(--del) 70%, transparent);
     }
 
     /* "Thread deleted · Undo". Bottom left, clear of the centred connection banner. */
@@ -2516,6 +2529,8 @@
         stroke: currentColor;
         stroke-width: 1.5;
         stroke-linecap: round;
+        /* An Icon asks for round joins; the bar keeps its mitred ones. */
+        stroke-linejoin: miter;
     }
 
     .link-button {
