@@ -512,8 +512,8 @@
         color: var(--ok);
     }
 
-    .review-dropped,
-    .review-dropped:hover {
+    .review-declined,
+    .review-declined:hover {
         border-color: transparent;
         background: var(--paper-sunk);
         color: var(--muted);

@@ -370,10 +370,10 @@ describe("reviewModel", () => {
         expect(reviewModel(snapshot, hash).verdict).toEqual(approved);
     });
 
-    test("a dropped doc is never changed, nor is a verdict that recorded no hash", () => {
+    test("a declined doc is never changed, nor is a verdict that recorded no hash", () => {
         const base = snapshotWith(["open"]);
-        const dropped = { ...base, verdict: { state: "dropped" as const, seq: 2, at, hash } };
-        expect(reviewModel(dropped, "0badf00d").changed).toBe(false);
+        const declined = { ...base, verdict: { state: "declined" as const, seq: 2, at, hash } };
+        expect(reviewModel(declined, "0badf00d").changed).toBe(false);
         const bare = { ...base, verdict: { state: "approved" as const, seq: 2, at } };
         expect(reviewModel(bare, "0badf00d").changed).toBe(false);
     });
@@ -403,7 +403,7 @@ describe("reviewModel", () => {
     test("a finish request is ignored once a verdict stands", () => {
         const snapshot: DocSnapshot = {
             ...snapshotWith(["open"]),
-            verdict: { state: "dropped", seq: 6, at, hash },
+            verdict: { state: "declined", seq: 6, at, hash },
             finish: { seq: 4, at, ids: ["c1"] },
         };
         expect(reviewModel(snapshot, hash).finish).toBeUndefined();

@@ -959,7 +959,7 @@ describe("doc verdict", () => {
         hash: "h1",
         ...(closed ? { closed } : {}),
     });
-    const drop: EventInput = { type: "verdict", by: "user", state: "dropped", hash: "h1" };
+    const decline: EventInput = { type: "verdict", by: "user", state: "declined", hash: "h1" };
     const resolved: EventInput = { type: "resolve", by: "user", id: "c1" };
     const pendingSuggestion: EventInput = {
         type: "suggest",
@@ -1000,14 +1000,31 @@ describe("doc verdict", () => {
         expect(thread(open, "c1").state).toBe("open");
         expect(open.version).toBe(2);
 
-        const dropped = foldLog(log(comment("c1"), drop, { ...forged, state: "open" }));
-        expect(dropped.verdict).toMatchObject({ state: "dropped", seq: 2, hash: "h1" });
+        const declined = foldLog(log(comment("c1"), decline, { ...forged, state: "open" }));
+        expect(declined.verdict).toMatchObject({ state: "declined", seq: 2, hash: "h1" });
+    });
+
+    test("a verdict in a state this version does not know is ignored: no status, nothing closed, no reopen", () => {
+        const unknown = {
+            type: "verdict",
+            by: "user",
+            state: "shelved",
+            hash: "h9",
+            closed: ["c1"],
+        } as unknown as EventInput;
+        const alone = foldLog(log(comment("c1"), unknown, comment("c2")));
+        expect(alone.verdict).toBeUndefined();
+        expect(thread(alone, "c1").state).toBe("open");
+        expect(alone.version).toBe(3);
+
+        const standing = foldLog(log(comment("c1"), resolved, approve(), unknown));
+        expect(standing.verdict).toMatchObject({ state: "approved", seq: 3, hash: "h1" });
     });
 
     test("any state follows any other, and the later verdict replaces the note and hash", () => {
         const state = foldLog(
             log(
-                { type: "verdict", by: "user", state: "dropped", hash: "h1", note: "No" },
+                { type: "verdict", by: "user", state: "declined", hash: "h1", note: "No" },
                 { type: "verdict", by: "user", state: "approved", hash: "h2" },
                 { type: "verdict", by: "user", state: "open", hash: "h3" },
             ),
@@ -1037,7 +1054,7 @@ describe("doc verdict", () => {
     });
 
     test("the verdict's own closing neither reopens the doc nor leaves a thread to wake on", () => {
-        const state = foldLog(log(comment("c1"), drop, approve(["c1"])));
+        const state = foldLog(log(comment("c1"), decline, approve(["c1"])));
         expect(state.verdict).toMatchObject({ state: "approved", seq: 3 });
         expect([...state.threads.values()].some(needsAgent)).toBe(false);
     });
@@ -1106,12 +1123,12 @@ describe("doc verdict", () => {
             ],
             [
                 "a finish request",
-                [comment("c1"), drop],
+                [comment("c1"), decline],
                 { type: "finish", by: "user", ids: ["c1"] },
             ],
         ];
         for (const [name, before, trigger] of reopening) {
-            test(`${name} by the user reopens an approved or dropped doc`, () => {
+            test(`${name} by the user reopens an approved or declined doc`, () => {
                 const events = log(...before, trigger);
                 const state = foldLog(events);
                 const last = events.at(-1)!;
@@ -1127,8 +1144,8 @@ describe("doc verdict", () => {
                 { type: "suggest", by: "agent", id: "c2", anchor, replace: "new", apply: false },
             ],
             ["a plain reject", base, { type: "reject", by: "user", id: "c1" }],
-            ["a resolve", [comment("c1"), drop], resolved],
-            ["a delete", [comment("c1"), drop], { type: "delete", by: "user", id: "c1" }],
+            ["a resolve", [comment("c1"), decline], resolved],
+            ["a delete", [comment("c1"), decline], { type: "delete", by: "user", id: "c1" }],
             [
                 "a resolved thread undeleted",
                 [comment("c1"), resolved, { type: "delete", by: "user", id: "c1" }, approve()],
@@ -1136,7 +1153,7 @@ describe("doc verdict", () => {
             ],
             [
                 "a retract that revives nothing",
-                [comment("c1"), { type: "reply", by: "user", id: "c1", text: "Hm" }, drop],
+                [comment("c1"), { type: "reply", by: "user", id: "c1", text: "Hm" }, decline],
                 { type: "retract", by: "user", id: "c1", of: 2 },
             ],
             [
@@ -1176,7 +1193,7 @@ describe("doc verdict", () => {
         test("activity on an open doc leaves it without a verdict", () => {
             expect(foldLog(log(comment("c1"), comment("c2"))).verdict).toBeUndefined();
             const reopened = foldLog(
-                log(comment("c1"), drop, comment("c2"), comment("c3")),
+                log(comment("c1"), decline, comment("c2"), comment("c3")),
             ).verdict;
             expect(reopened).toMatchObject({ state: "open", seq: 3 });
         });
@@ -1246,7 +1263,7 @@ describe("doc verdict", () => {
         });
 
         test("any verdict clears the request", () => {
-            const state = foldLog(log(comment("c1"), finish("c1"), drop));
+            const state = foldLog(log(comment("c1"), finish("c1"), decline));
             expect(state.finish).toBeUndefined();
             expect(finishRemaining(state)).toEqual([]);
             expect(thread(state).state).toBe("open");

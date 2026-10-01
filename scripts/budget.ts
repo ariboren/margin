@@ -453,8 +453,8 @@ export async function measure(source: string): Promise<Measured> {
             ops.push({ name: `watch ${name}`, keys: ["watch"], stdout: line });
             return byteLength(line);
         };
-        await seedVerdict(world, "dropped");
-        await status("dropped with ten threads");
+        await seedVerdict(world, "declined");
+        await status("declined with ten threads");
         const handed = await seedFinish(world);
         finishBytes += await status("finish with ten threads");
         const read = await cli(world, "", "pending", "doc.md");

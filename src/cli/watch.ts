@@ -6,6 +6,7 @@ import { statSync } from "node:fs";
 import { UNKNOWN_AGENT, signed } from "../core/agent.ts";
 import {
     isDocNote,
+    isVerdictState,
     type AgentIdentity,
     type Event,
     type ThreadId,
@@ -73,14 +74,15 @@ export function wakeReason(event: Event, state: DocState): WakeReason | undefine
 }
 
 /**
- * The doc-level wake of `event`: a verdict, or the user's event that put an approved or dropped
+ * The doc-level wake of `event`: a verdict, or the user's event that put an approved or declined
  * doc back to open, which the fold records by giving the open verdict that event's seq. In a
  * `state` folded past the event only the one that set the standing status still reads as a reopen.
  */
 export function docWake(event: Event, state: DocState): WakeReason | undefined {
     if (event.type === "verdict") {
-        // The fold ignores one the user did not sign, so it changed nothing to wake for.
-        if (event.by !== "user") return undefined;
+        // The fold ignores one the user did not sign or in an unknown state, so it changed
+        // nothing to wake for.
+        if (event.by !== "user" || !isVerdictState(event.state)) return undefined;
         return event.state === "open" ? "reopened" : event.state;
     }
     const { verdict } = state;

@@ -45,9 +45,9 @@ describe("reviewLabel", () => {
             rest: ", changed since",
             badge: "",
         });
-        expect(reviewLabel(model({ state: "dropped", changed: true }))).toEqual({
-            tone: "dropped",
-            lead: "Dropped",
+        expect(reviewLabel(model({ state: "declined", changed: true }))).toEqual({
+            tone: "declined",
+            lead: "Declined",
             rest: "",
         });
     });
@@ -76,27 +76,27 @@ describe("verdictActions", () => {
     const shown = (change: Partial<ReviewModel>) =>
         verdictActions(model(change)).map((action) => [action.label, action.state, action.look]);
 
-    test("an open doc with nothing unresolved offers Approve first, then Drop", () => {
+    test("an open doc with nothing unresolved offers Approve first, then Decline", () => {
         expect(shown({})).toEqual([
             ["Approve", "approved", "accept"],
-            ["Drop", "dropped", "danger"],
+            ["Decline", "declined", "danger"],
         ]);
     });
 
-    test("with threads unresolved only Drop is a button; approving goes through the paths", () => {
-        expect(shown({ unresolved: ["c1"] })).toEqual([["Drop", "dropped", "danger"]]);
+    test("with threads unresolved only Decline is a button; approving goes through the paths", () => {
+        expect(shown({ unresolved: ["c1"] })).toEqual([["Decline", "declined", "danger"]]);
     });
 
-    test("an approved doc reopens first, then drops", () => {
+    test("an approved doc reopens first, then declines", () => {
         expect(shown({ state: "approved" })).toEqual([
             ["Reopen", "open", "primary"],
-            ["Drop instead", "dropped", "danger"],
+            ["Decline instead", "declined", "danger"],
         ]);
     });
 
-    test("a dropped doc only reopens, with or without threads unresolved", () => {
-        expect(shown({ state: "dropped" })).toEqual([["Reopen", "open", "primary"]]);
-        expect(shown({ state: "dropped", unresolved: ["c1", "c2"] })).toEqual([
+    test("a declined doc only reopens, with or without threads unresolved", () => {
+        expect(shown({ state: "declined" })).toEqual([["Reopen", "open", "primary"]]);
+        expect(shown({ state: "declined", unresolved: ["c1", "c2"] })).toEqual([
             ["Reopen", "open", "primary"],
         ]);
     });
@@ -106,7 +106,7 @@ describe("verdictActions", () => {
             verdictActions(model(change)).map((action) => action.icon);
         expect(icons({})).toEqual(["check", "slash"]);
         expect(icons({ state: "approved" })).toEqual(["reopen", "slash"]);
-        expect(icons({ state: "dropped" })).toEqual(["reopen"]);
+        expect(icons({ state: "declined" })).toEqual(["reopen"]);
     });
 });
 
@@ -239,8 +239,8 @@ describe("against the store", () => {
         store.simulateOutsideChange({ start, end: start + 5 }, "simple");
         expect(label()).toBe("Approved, changed since");
 
-        await store.setVerdict({ state: "dropped" });
-        expect(label()).toBe("Dropped");
+        await store.setVerdict({ state: "declined" });
+        expect(label()).toBe("Declined");
         await store.setVerdict({ state: "open" });
         expect(label()).toBe("Review");
     });

@@ -105,12 +105,12 @@ describe("doc status", () => {
             formatWatch({
                 form: "compact",
                 groups: [
-                    { reason: "dropped", ids: [] },
+                    { reason: "declined", ids: [] },
                     { reason: "new", ids: ["c7"], path: "A" },
                 ],
             }),
-        ).toBe('dropped | new c7 "A"');
-        for (const reason of ["approved", "dropped", "reopened"] as const) {
+        ).toBe('declined | new c7 "A"');
+        for (const reason of ["approved", "declined", "reopened"] as const) {
             expect(formatWatch({ form: "compact", groups: [{ reason, ids: [] }] })).toBe(reason);
         }
         expect(
@@ -126,8 +126,8 @@ describe("doc status", () => {
         expect(header({ verdict: "approved", changed: true, note: "a\nb" })).toBe(
             "approved changed: a\\nb",
         );
-        expect(header({ verdict: "dropped" })).toBe("dropped");
-        expect(header({ verdict: "dropped", note: "Later" })).toBe("dropped: Later");
+        expect(header({ verdict: "declined" })).toBe("declined");
+        expect(header({ verdict: "declined", note: "Later" })).toBe("declined: Later");
         expect(header({ finish: true })).toBe("finish");
         expect(header({ reopened: true })).toBe("reopened");
         expect(header({})).toBe("none");

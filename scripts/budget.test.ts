@@ -51,7 +51,7 @@ describe("budget on the public sample", () => {
         const ids = Array.from({ length: 10 }, (_, index) => ` c${index + 1}`).join("");
         expect(measured.statusLines).toEqual([
             "approved\n",
-            `dropped | new${ids}\n`,
+            `declined | new${ids}\n`,
             `finish${ids}\n`,
             "approved\n",
             "reopened\n",

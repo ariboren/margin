@@ -259,8 +259,10 @@ export interface ReanchorEvent extends EventBase {
     anchors: Partial<Record<ThreadId, Anchor>>;
 }
 
+const VERDICT_STATES = ["open", "approved", "declined"] as const;
+
 /** A doc's review status. `open` is the default and what a reopen returns to. */
-export type VerdictState = "open" | "approved" | "dropped";
+export type VerdictState = (typeof VERDICT_STATES)[number];
 
 /**
  * User only: the agent CLI has no command that writes one. Sets the doc's status; any state may
@@ -284,7 +286,7 @@ export interface VerdictEvent extends EventBase {
  * User only. A request, not a verdict: the user asks the agent to settle what is left. `ids` are
  * the threads handed over, every one unresolved once margin had accepted the pending agent
  * suggestions and sent the held drafts; the fold sets them to `open` so `pending` returns them.
- * A doc that was approved or dropped is open again.
+ * A doc that was approved or declined is open again.
  */
 export interface FinishEvent extends EventBase {
     type: "finish";
@@ -382,8 +384,16 @@ export function isUnresolved(thread: Pick<Thread, "state">): boolean {
 }
 
 /**
+ * A log or a request may carry a state this version does not know. Readers treat such a verdict
+ * as absent rather than store a status nothing can show.
+ */
+export function isVerdictState(value: unknown): value is VerdictState {
+    return (VERDICT_STATES as readonly unknown[]).includes(value);
+}
+
+/**
  * The doc's status as folded from the log. Absent until the first verdict, which reads as open.
- * The user's own thread activity after an approval or a drop (a comment, held or not, a reply, a
+ * The user's own thread activity after an approval or a decline (a comment, held or not, a reply, a
  * suggestion, a reject with a note, a thread reopened, undeleted or brought back by a retract, a
  * finish request) puts the doc back to `open` with no verdict event; agent events never do.
  */
@@ -482,7 +492,7 @@ export interface DocStore {
     setSetting(key: DocSettingKey, value: boolean): Promise<void>;
     /**
      * `approved` is refused while threads are unresolved, unless `asIs`: then the store closes
-     * every one of them with the verdict, applying no suggestion. `dropped` leaves threads alone;
+     * every one of them with the verdict, applying no suggestion. `declined` leaves threads alone;
      * `open` reopens, and does nothing on a doc that is already open. Never on the undo stack.
      */
     setVerdict(input: {
@@ -514,18 +524,18 @@ export interface StoreStatus {
 // CLI output shapes. Text renderings are what the agent reads; these are the renderers' input.
 
 /**
- * `new`, `reply`, `rejected` and `finish` are about threads. `approved`, `dropped` and `reopened`
+ * `new`, `reply`, `rejected` and `finish` are about threads. `approved`, `declined` and `reopened`
  * are about the doc: the verdict the user gave, or the doc going back to open.
  */
 export type WakeReason =
-    "new" | "reply" | "rejected" | "approved" | "dropped" | "reopened" | "finish";
+    "new" | "reply" | "rejected" | "approved" | "declined" | "reopened" | "finish";
 
 /** One compact line per batch; the agent then reads the threads through `pending`. */
 export interface WatchLine {
     form: "compact";
     /**
      * `doc`: every id is a doc note; printed as `doc` where the path would go. A group for a
-     * doc-level reason (`approved`, `dropped`, `reopened`) has empty `ids` and neither `path` nor
+     * doc-level reason (`approved`, `declined`, `reopened`) has empty `ids` and neither `path` nor
      * `doc`; `finish` lists the threads handed over.
      */
     groups: { reason: WakeReason; ids: ThreadId[]; path?: string; doc?: true }[];
@@ -563,7 +573,7 @@ export interface PendingEdit {
  */
 export interface PendingReview {
     /** The standing verdict; absent while the doc is open. */
-    verdict?: "approved" | "dropped";
+    verdict?: "approved" | "declined";
     /** With `verdict`: the doc hash differs from the one the verdict recorded. */
     changed?: true;
     /** With `verdict`: the user's note. */

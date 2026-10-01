@@ -4,6 +4,7 @@ import { hashText } from "./blocks.ts";
 import { transact, type LogTxn } from "./log.ts";
 import {
     isUnresolved,
+    isVerdictState,
     type AppliedEdit,
     type Anchor,
     type DocSettings,
@@ -129,7 +130,7 @@ export function applyEvent(state: DocState, event: Event): DocState {
 
 /**
  * Whether the user's `event`, already folded in, is thread activity that puts an approved or
- * dropped doc back to open. A verdict is never one, so the threads it closes cannot reopen it.
+ * declined doc back to open. A verdict is never one, so the threads it closes cannot reopen it.
  * `wasResolved`: the event's thread was resolved before it.
  */
 function revivesDoc(state: DocState, event: Event, wasResolved: boolean): boolean {
@@ -373,8 +374,9 @@ function applyEventBody(state: DocState, event: Event): void {
             }
             break;
         case "verdict": {
-            // User only: a verdict signed by anyone else changes nothing.
-            if (event.by !== "user") {
+            // User only: a verdict signed by anyone else changes nothing, nor does one in a state
+            // this version does not know.
+            if (event.by !== "user" || !isVerdictState(event.state)) {
                 break;
             }
             const closed = new Set(event.closed);

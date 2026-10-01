@@ -161,7 +161,7 @@ async function watchedQuietly(input: EventInput): Promise<string[]> {
 
 describe("doc status", () => {
     const approve = { type: "verdict", by: "user", state: "approved", hash: "h" } as const;
-    const drop = { type: "verdict", by: "user", state: "dropped", hash: "h" } as const;
+    const decline = { type: "verdict", by: "user", state: "declined", hash: "h" } as const;
     const reopen = { type: "verdict", by: "user", state: "open", hash: "h" } as const;
 
     test("a verdict prints its word alone, once", async () => {
@@ -169,16 +169,16 @@ describe("doc status", () => {
         expect(await emitted()).toBe("approved\n");
         expect((await events()).at(-1)).toMatchObject({ type: "cursor", upTo: 1, ids: [] });
         expect(await emitted()).toBe("");
-        await box.append(drop);
-        expect(await emitted()).toBe("dropped\n");
+        await box.append(decline);
+        expect(await emitted()).toBe("declined\n");
         await box.append(reopen);
         expect(await emitted()).toBe("reopened\n");
     });
 
     test("of several past the cursor only the standing one prints", async () => {
-        await box.append(approve, reopen, drop);
-        expect(await emitted()).toBe("dropped\n");
-        await box.append(approve, drop, reopen);
+        await box.append(approve, reopen, decline);
+        expect(await emitted()).toBe("declined\n");
+        await box.append(approve, decline, reopen);
         expect(await emitted()).toBe("reopened\n");
     });
 
@@ -188,7 +188,7 @@ describe("doc status", () => {
         await box.comment("cold path", "One more thing");
         expect(await emitted()).toBe('reopened | new c1 "Findings"\n');
 
-        await box.append({ type: "resolve", by: "user", id: "c1" }, drop);
+        await box.append({ type: "resolve", by: "user", id: "c1" }, decline);
         await emitted();
         await box.comment("Retry queue", "Held", { draft: true });
         const log = await events();
@@ -208,10 +208,10 @@ describe("doc status", () => {
         expect(await emitted()).toBe("");
     });
 
-    test("a drop leaves waiting threads in the line", async () => {
+    test("a decline leaves waiting threads in the line", async () => {
         await box.comment("cold path", "Why?");
-        await box.append(drop);
-        expect(await emitted()).toBe('dropped | new c1 "Findings"\n');
+        await box.append(decline);
+        expect(await emitted()).toBe('declined | new c1 "Findings"\n');
     });
 
     test("finish lists the threads handed over, under no other word", async () => {
@@ -226,9 +226,9 @@ describe("doc status", () => {
         expect(await emitted()).toBe("");
     });
 
-    test("finish on a dropped doc leaves reopened out", async () => {
+    test("finish on a declined doc leaves reopened out", async () => {
         const id = await box.comment("cold path", "Why?");
-        await box.append(drop);
+        await box.append(decline);
         await emitted();
         await box.append({ type: "finish", by: "user", ids: [id] });
         expect((await box.state()).verdict).toMatchObject({ state: "open", seq: 4 });
@@ -274,7 +274,17 @@ describe("doc status", () => {
         expect(wakeReason(log[0]!, foldLog(log))).toBeUndefined();
         expect(await emitted()).toBe("");
         expect(await events()).toHaveLength(1);
-        expect(await watchedQuietly({ ...drop, by: "agent" })).toEqual([]);
+        expect(await watchedQuietly({ ...decline, by: "agent" })).toEqual([]);
+    });
+
+    test("a verdict in a state this version does not know wakes nothing and prints nothing", async () => {
+        const unknown = { ...approve, state: "shelved" } as unknown as EventInput;
+        await box.append(unknown);
+        const log = await events();
+        expect(docWake(log[0]!, foldLog(log))).toBeUndefined();
+        expect(await emitted()).toBe("");
+        expect(await events()).toHaveLength(1);
+        expect(await watchedQuietly(unknown)).toEqual([]);
     });
 
     test("a finish the user did not sign wakes nothing and prints nothing", async () => {

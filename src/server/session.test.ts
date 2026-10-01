@@ -1624,23 +1624,23 @@ describe("verdict and finish", () => {
         expect(await session.setVerdict({ state: "approved" })).toMatchObject({ ok: true });
     });
 
-    test("a drop leaves the open threads alone, and as-is means nothing on it", async () => {
+    test("a decline leaves the open threads alone, and as-is means nothing on it", async () => {
         const { session, anchor, thread, logged } = await setup();
         const { id } = await session.comment({ anchor: anchor("quick"), text: "Why?" });
-        const dropped = await session.setVerdict({ state: "dropped", asIs: true });
-        expect(dropped).toMatchObject({ ok: true, seq: 2 });
+        const declined = await session.setVerdict({ state: "declined", asIs: true });
+        expect(declined).toMatchObject({ ok: true, seq: 2 });
         expect(thread(id).state).toBe("open");
-        expect(session.snapshot().verdict).toMatchObject({ state: "dropped", seq: 2 });
+        expect(session.snapshot().verdict).toMatchObject({ state: "declined", seq: 2 });
         expect((await logged("verdict"))[0]).not.toHaveProperty("closed");
     });
 
-    test("a reopen of an open doc logs nothing; of a dropped one, a verdict", async () => {
+    test("a reopen of an open doc logs nothing; of a declined one, a verdict", async () => {
         const { session, logged } = await setup();
         const noop = await session.setVerdict({ state: "open" });
         expect(noop).toEqual({ ok: true, version: 0 });
         expect(await logged("verdict")).toEqual([]);
 
-        await session.setVerdict({ state: "dropped" });
+        await session.setVerdict({ state: "declined" });
         const reopened = await session.setVerdict({ state: "open" });
         expect(reopened).toMatchObject({ ok: true, seq: 2 });
         expect(session.snapshot().verdict).toMatchObject({ state: "open", seq: 2 });
@@ -1707,15 +1707,15 @@ describe("verdict and finish", () => {
 
     test("the note is one trimmed line, left out when empty, and refused past the cap", async () => {
         const { session, logged } = await setup();
-        await session.setVerdict({ state: "dropped", note: "  Not now.\r\n\n  Maybe later. " });
+        await session.setVerdict({ state: "declined", note: "  Not now.\r\n\n  Maybe later. " });
         expect(session.snapshot().verdict!.note).toBe("Not now. Maybe later.");
-        await session.setVerdict({ state: "dropped", note: " \n " });
+        await session.setVerdict({ state: "declined", note: " \n " });
         expect(session.snapshot().verdict).not.toHaveProperty("note");
-        await session.setVerdict({ state: "dropped", note: "x".repeat(MAX_VERDICT_NOTE) });
+        await session.setVerdict({ state: "declined", note: "x".repeat(MAX_VERDICT_NOTE) });
         expect(session.snapshot().verdict!.note).toHaveLength(MAX_VERDICT_NOTE);
 
         const tooLong = session.setVerdict({
-            state: "dropped",
+            state: "declined",
             note: "x".repeat(MAX_VERDICT_NOTE + 1),
         });
         await expect(tooLong).rejects.toMatchObject({ status: 400, error: "bad-request" });
@@ -1728,7 +1728,7 @@ describe("verdict and finish", () => {
         rmSync(path);
         const count = (await events(path)).length;
         const gone = { status: 409, error: "missing" };
-        await expect(session.setVerdict({ state: "dropped" })).rejects.toMatchObject(gone);
+        await expect(session.setVerdict({ state: "declined" })).rejects.toMatchObject(gone);
         await expect(session.setVerdict({ state: "open" })).rejects.toMatchObject(gone);
         await expect(session.requestFinish()).rejects.toMatchObject(gone);
         await session.sync();
@@ -1736,7 +1736,7 @@ describe("verdict and finish", () => {
 
         rmSync(dir, { recursive: true });
         await expect(session.requestFinish()).rejects.toMatchObject(gone);
-        await expect(session.setVerdict({ state: "dropped" })).rejects.toMatchObject(gone);
+        await expect(session.setVerdict({ state: "declined" })).rejects.toMatchObject(gone);
     });
 
     test("finish with nothing unresolved logs nothing", async () => {
@@ -1881,7 +1881,7 @@ describe("verdict and finish", () => {
     test("finish reopens an approved doc, and the next verdict ends the request", async () => {
         const { session, anchor, agent } = await setup();
         const { id } = await session.comment({ anchor: anchor("quick"), text: "Why?" });
-        await session.setVerdict({ state: "dropped" });
+        await session.setVerdict({ state: "declined" });
         const finished = await session.requestFinish();
         expect(session.snapshot()).toMatchObject({
             verdict: { state: "open", seq: finished.seq },

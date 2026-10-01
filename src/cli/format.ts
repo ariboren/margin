@@ -72,7 +72,7 @@ export function formatThread(thread: PendingThread, withMessages = true): string
     return lines.join("\n");
 }
 
-/** `approved changed: note`, `dropped`, `finish` or `reopened`; nothing for an open doc. */
+/** `approved changed: note`, `declined`, `finish` or `reopened`; nothing for an open doc. */
 function reviewLine(review: PendingReview | undefined): string[] {
     if (review?.verdict) {
         const changed = review.changed ? " changed" : "";

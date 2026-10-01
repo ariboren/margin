@@ -269,19 +269,19 @@ describe("memory store verdict and finish", () => {
         expect(wakes).toEqual([]);
     });
 
-    test("drop leaves open threads alone; reopen goes back to open and says so once", async () => {
+    test("decline leaves open threads alone; reopen goes back to open and says so once", async () => {
         const { store, docWakes } = bare();
         const id = await store.comment({ anchor: anchorOn(store, "Title"), text: "Rename?" });
         expect(await store.setVerdict({ state: "open" })).toEqual({ ok: true });
         expect(store.snapshot().verdict).toBeUndefined();
-        expect(await store.setVerdict({ state: "dropped", asIs: true })).toEqual({ ok: true });
+        expect(await store.setVerdict({ state: "declined", asIs: true })).toEqual({ ok: true });
         expect(thread(store, id).state).toBe("open");
-        expect(store.snapshot().verdict).toMatchObject({ state: "dropped" });
+        expect(store.snapshot().verdict).toMatchObject({ state: "declined" });
         expect(store.snapshot().verdict?.closed).toBeUndefined();
         await store.setVerdict({ state: "open" });
         expect(store.snapshot().verdict).toMatchObject({ state: "open" });
         await store.setVerdict({ state: "open" });
-        expect(docWakes).toEqual(["dropped", "reopened"]);
+        expect(docWakes).toEqual(["declined", "reopened"]);
     });
 
     test("an edit never clears the verdict; its hash tells the doc changed since", async () => {
@@ -296,7 +296,7 @@ describe("memory store verdict and finish", () => {
         expect(store.snapshot().verdict?.hash).toBe(hashText(store.snapshot().doc.source));
     });
 
-    test("the user's thread activity reopens an approved or dropped doc", async () => {
+    test("the user's thread activity reopens an approved or declined doc", async () => {
         const anchor = (store: MemoryStore) => anchorOn(store, "Title");
         const acts: [string, (store: MemoryStore, id: ThreadId) => Promise<unknown>][] = [
             ["comment", (store) => store.comment({ text: "One more" })],
@@ -399,10 +399,10 @@ describe("memory store verdict and finish", () => {
         expect(wakes).toEqual([]);
 
         const id = await store.comment({ text: "Sort this out" });
-        await store.setVerdict({ state: "dropped" });
+        await store.setVerdict({ state: "declined" });
         await store.requestFinish();
         expect(store.snapshot().verdict?.state).toBe("open");
-        expect(docWakes).toEqual(["dropped", "reopened"]);
+        expect(docWakes).toEqual(["declined", "reopened"]);
         expect(await store.setVerdict({ state: "approved" })).toMatchObject({ ok: false });
 
         store.agentResolve(id);

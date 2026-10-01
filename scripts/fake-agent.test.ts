@@ -3,7 +3,7 @@ import { parsePending, parseWatch } from "./fake-agent.ts";
 
 describe("watch lines", () => {
     test("a doc word is a group with no ids", () => {
-        for (const reason of ["approved", "dropped", "reopened"] as const) {
+        for (const reason of ["approved", "declined", "reopened"] as const) {
             expect(parseWatch(`${reason}\n`)).toEqual({
                 form: "compact",
                 groups: [{ reason, ids: [] }],
@@ -15,8 +15,8 @@ describe("watch lines", () => {
         expect(parseWatch("finish c3 c5\n")?.groups).toEqual([
             { reason: "finish", ids: ["c3", "c5"] },
         ]);
-        expect(parseWatch('dropped | new c7 "2. Findings"\n')?.groups).toEqual([
-            { reason: "dropped", ids: [] },
+        expect(parseWatch('declined | new c7 "2. Findings"\n')?.groups).toEqual([
+            { reason: "declined", ids: [] },
             { reason: "new", ids: ["c7"], path: "2. Findings" },
         ]);
     });
@@ -34,8 +34,8 @@ describe("pending header", () => {
             changed: true,
             note: "Ship it\nnow",
         });
-        expect(parsePending("dropped: Later\n").review).toEqual({
-            verdict: "dropped",
+        expect(parsePending("declined: Later\n").review).toEqual({
+            verdict: "declined",
             note: "Later",
         });
         expect(parsePending("reopened\n").review).toEqual({ reopened: true });

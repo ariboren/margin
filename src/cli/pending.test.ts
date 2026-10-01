@@ -251,7 +251,7 @@ describe("review header", () => {
     }
 
     async function verdict(
-        state: "approved" | "dropped" | "open",
+        state: "approved" | "declined" | "open",
         extra: { note?: string; closed?: ThreadId[] } = {},
     ): Promise<void> {
         await box.append({ type: "verdict", by: "user", state, hash: docHash(), ...extra });
@@ -273,8 +273,8 @@ describe("review header", () => {
         await verdict("approved", { note: "Ship it" });
         expect(await readText()).toBe("approved: Ship it\n");
         expect((await read()).review).toEqual({ verdict: "approved", note: "Ship it" });
-        await verdict("dropped", { note: "Not now\nmaybe later" });
-        expect(await readText()).toBe("dropped: Not now\\nmaybe later\n");
+        await verdict("declined", { note: "Not now\nmaybe later" });
+        expect(await readText()).toBe("declined: Not now\\nmaybe later\n");
     });
 
     test("changed is the verdict's hash against hashText of the source as read", async () => {
@@ -294,19 +294,19 @@ describe("review header", () => {
         expect(await readText()).toBe("approved\n");
     });
 
-    test("a dropped doc never says changed, and a missing doc says nothing of it", async () => {
-        await verdict("dropped");
+    test("a declined doc never says changed, and a missing doc says nothing of it", async () => {
+        await verdict("declined");
         await userEdit("rarely runs", "never runs");
-        expect((await read()).review).toEqual({ verdict: "dropped" });
+        expect((await read()).review).toEqual({ verdict: "declined" });
         await verdict("approved");
         rmSync(box.doc);
         expect((await read()).review).toEqual({ verdict: "approved" });
     });
 
-    test("a drop leaves its threads under the header", async () => {
+    test("a decline leaves its threads under the header", async () => {
         await box.comment("cold path", "Why?");
-        await verdict("dropped");
-        expect(await readText()).toStartWith("dropped\nc1 open L5 Findings\n");
+        await verdict("declined");
+        expect(await readText()).toStartWith("declined\nc1 open L5 Findings\n");
     });
 
     test("reopened is said once, to the read whose cursor it is past", async () => {
@@ -345,9 +345,9 @@ describe("review header", () => {
         expect(await readText()).toBe("none\n");
     });
 
-    test("a finish that reopened a dropped doc says finish, then nothing once settled", async () => {
+    test("a finish that reopened a declined doc says finish, then nothing once settled", async () => {
         const id = await box.comment("cold path", "Why?");
-        await verdict("dropped");
+        await verdict("declined");
         await box.append({ type: "finish", by: "user", ids: [id] });
         expect((await read()).review).toEqual({ finish: true });
         await box.append({ type: "resolve", by: "agent", id });
@@ -419,12 +419,13 @@ describe("pending --wait", () => {
         expect(out).toBe("");
     });
 
-    test("a verdict or a finish the user did not sign leaves it blocked", async () => {
+    test("a verdict or a finish the user did not sign, or a verdict in an unknown state, leaves it blocked", async () => {
         const id = await box.comment("cold path", "A");
         await read();
         const steps: EventInput[] = [
             { type: "verdict", by: "agent", state: "approved", hash: "h", closed: [id] },
             { type: "finish", by: "agent", ids: [id] },
+            { type: "verdict", by: "user", state: "shelved", hash: "h" } as unknown as EventInput,
         ];
         for (const input of steps) {
             const stop = new AbortController();

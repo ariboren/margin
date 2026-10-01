@@ -19,7 +19,7 @@ Answer in the doc, then end the turn silently; chat only if asked for updates. M
 Before a big rewrite, answer or resolve threads it covers, or they detach.
 Doc status (watch; pending line 1):
   finish c3 c5: settle each, ask nothing, stop: suggest --apply + resolve, or reply --resolve; show <id> for context
-  approved: do what the doc says; approved changed: edited since; dropped: stop until reopened
+  approved: do what the doc says; approved changed: edited since; declined: stop until reopened
 
 margin pending <doc>  waiting threads (now working) + user edits (edit L13 path [-old-]{+new+})
   cN open doc: a whole-doc note, no quote. Reply or resolve; edit via suggest --find.

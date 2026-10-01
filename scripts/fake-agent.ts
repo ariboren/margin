@@ -72,7 +72,7 @@ const REASONS: readonly string[] = [
     "reply",
     "rejected",
     "approved",
-    "dropped",
+    "declined",
     "reopened",
     "finish",
 ] satisfies WakeReason[];
@@ -118,14 +118,14 @@ function unescapeLine(text: string): string {
     return text.replace(/\\n/g, "\n");
 }
 
-/** The header of `pending`: `approved changed: note`, `dropped`, `finish` or `reopened`. */
+/** The header of `pending`: `approved changed: note`, `declined`, `finish` or `reopened`. */
 function parseReview(line: string): PendingReview | undefined {
     if (line === "finish") return { finish: true };
     if (line === "reopened") return { reopened: true };
-    const verdict = /^(approved|dropped)( changed)?(?:: (.*))?$/.exec(line);
+    const verdict = /^(approved|declined)( changed)?(?:: (.*))?$/.exec(line);
     if (!verdict) return undefined;
     return {
-        verdict: verdict[1] as "approved" | "dropped",
+        verdict: verdict[1] as "approved" | "declined",
         ...(verdict[2] ? { changed: true as const } : {}),
         ...(verdict[3] === undefined ? {} : { note: unescapeLine(verdict[3]) }),
     };

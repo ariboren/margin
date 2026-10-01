@@ -45,7 +45,7 @@ export interface Wake {
 }
 
 /** The reasons about the doc as a whole, which name no thread. */
-export type DocWake = Extract<WakeReason, "approved" | "dropped" | "reopened">;
+export type DocWake = Extract<WakeReason, "approved" | "declined" | "reopened">;
 
 /** A thread placed at load time, in the source as it was before any seeded edit. */
 export interface SeedThread {
@@ -508,7 +508,7 @@ export class MemoryStore implements DocStore {
         return this.live().filter(isUnresolved);
     }
 
-    /** The user's own thread activity puts an approved or dropped doc back to open. */
+    /** The user's own thread activity puts an approved or declined doc back to open. */
     private reviveDoc(): void {
         if (this.verdict && this.verdict.state !== "open") {
             this.verdict = { state: "open", seq: this.seq, at: this.isoNow() };

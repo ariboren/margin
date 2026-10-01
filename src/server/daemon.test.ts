@@ -492,8 +492,8 @@ describe("verdict and finish routes", () => {
         for (const body of [
             {},
             { state: "done" },
-            { state: "dropped", note: 3 },
-            { state: "dropped", note: "x".repeat(201) },
+            { state: "declined", note: 3 },
+            { state: "declined", note: "x".repeat(201) },
             { state: "approved", asIs: "yes" },
         ]) {
             const response = await post(docId, "verdict", body);

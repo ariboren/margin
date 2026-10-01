@@ -10,7 +10,7 @@ import {
     type UnresolvedKind,
 } from "../view-model.ts";
 
-export type ReviewTone = "open" | "approved" | "dropped" | "finishing" | "ready";
+export type ReviewTone = "open" | "approved" | "declined" | "finishing" | "ready";
 
 /**
  * The control's label in two parts: a tight bar shows only `lead`, with `badge` standing in for
@@ -29,8 +29,8 @@ export function reviewLabel(model: ReviewModel): ReviewLabel {
             ? { tone: "approved", lead: "Approved", rest: ", changed since", badge: "" }
             : { tone: "approved", lead: "Approved", rest: "" };
     }
-    if (model.state === "dropped") {
-        return { tone: "dropped", lead: "Dropped", rest: "" };
+    if (model.state === "declined") {
+        return { tone: "declined", lead: "Declined", rest: "" };
     }
     const remaining = model.finish?.remaining ?? 0;
     if (remaining > 0) {
@@ -126,7 +126,7 @@ export interface VerdictAction {
 
 /**
  * The verdict buttons in the order they show and take focus: the positive or primary one first,
- * as a thread card puts Accept before Reject. A dropped doc only reopens; approving is done from
+ * as a thread card puts Accept before Reject. A declined doc only reopens; approving is done from
  * the open state.
  */
 export function verdictActions(model: ReviewModel): VerdictAction[] {
@@ -136,24 +136,24 @@ export function verdictActions(model: ReviewModel): VerdictAction[] {
         icon: "reopen",
         look: "primary",
     };
-    const drop = (label: string): VerdictAction => ({
+    const decline = (label: string): VerdictAction => ({
         label,
-        state: "dropped",
+        state: "declined",
         icon: "slash",
         look: "danger",
     });
     switch (model.state) {
         case "approved":
-            return [reopen, drop("Drop instead")];
-        case "dropped":
+            return [reopen, decline("Decline instead")];
+        case "declined":
             return [reopen];
         case "open":
             return model.unresolved.length === 0
                 ? [
                       { label: "Approve", state: "approved", icon: "check", look: "accept" },
-                      drop("Drop"),
+                      decline("Decline"),
                   ]
-                : [drop("Drop")];
+                : [decline("Decline")];
     }
 }
 
@@ -480,7 +480,7 @@ function Standing({
     return (
         <>
             <p class="review-head">
-                {approved ? "Approved" : "Dropped"} {relativeTime(verdict.at, now)}
+                {approved ? "Approved" : "Declined"} {relativeTime(verdict.at, now)}
             </p>
             {verdict.note ? <p class="review-quote">{verdict.note}</p> : null}
             {approved ? (
@@ -536,7 +536,7 @@ function ToneMark({ tone }: { tone: ReviewTone }): JSX.Element {
     return tone === "finishing" ? (
         <span class="review-dot" aria-hidden="true" />
     ) : (
-        <Mark kind={tone === "dropped" ? "slash" : "check"} />
+        <Mark kind={tone === "declined" ? "slash" : "check"} />
     );
 }
 

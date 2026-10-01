@@ -23,7 +23,7 @@ const QUOTES = [
 ];
 const NO_WAKE_MS = 800;
 /** The verdict that sets a doc aside: its stored state, and the word `watch` and `pending` print. */
-const DROPPED = "dropped" satisfies VerdictState;
+const DECLINED = "declined" satisfies VerdictState;
 const budget = JSON.parse(
     readFileSync(join(import.meta.dir, "..", "..", "budget.json"), "utf8"),
 ) as Ceilings;
@@ -434,7 +434,7 @@ describe("loop against a live daemon", () => {
         expect(pending.threads.map((thread) => thread.id)).toEqual([ids[1]!]);
     });
 
-    test("drop with a thread open tells the agent and leaves the thread alone", async () => {
+    test("decline with a thread open tells the agent and leaves the thread alone", async () => {
         const { tab, agent, original, bytes } = await world();
         const id = await tab.comment(QUOTES[3]!, "Is this retention right?");
         expect(await agent.watchOnce(5_000)).toMatchObject({
@@ -443,21 +443,21 @@ describe("loop against a live daemon", () => {
         const before = await tab.thread(id);
         expect(before?.state).toBe("open");
 
-        expect(await tab.post("verdict", { state: DROPPED })).toMatchObject({ ok: true });
+        expect(await tab.post("verdict", { state: DECLINED })).toMatchObject({ ok: true });
         expect(await agent.watchOnce(5_000)).toEqual({
             form: "compact",
-            groups: [{ reason: DROPPED, ids: [] }],
+            groups: [{ reason: DECLINED, ids: [] }],
         });
-        expect(lastStdout(agent, "watch")).toBe(`${DROPPED}\n`);
+        expect(lastStdout(agent, "watch")).toBe(`${DECLINED}\n`);
         const snapshot = await tab.snapshot();
-        expect(snapshot.verdict).toMatchObject({ state: DROPPED });
+        expect(snapshot.verdict).toMatchObject({ state: DECLINED });
         // The watch above stamped the thread as notified; the daemon may fold that only now.
         expect(snapshot.threads).toEqual([{ ...before!, notifiedAt: expect.any(String) }]);
         expect(bytes().equals(original)).toBe(true);
 
         const pending = await agent.pending();
-        expect(pending.review).toEqual({ verdict: DROPPED });
-        expect(lastStdout(agent, "pending").split("\n")[0]).toBe(DROPPED);
+        expect(pending.review).toEqual({ verdict: DECLINED });
+        expect(lastStdout(agent, "pending").split("\n")[0]).toBe(DECLINED);
         expect(pending.threads.map((thread) => thread.id)).toEqual([id]);
     });
 });

@@ -299,7 +299,7 @@ export interface ReviewModel {
     /** Every thread an approval would be refused on, in thread order. */
     unresolved: ThreadId[];
     counts: Record<UnresolvedKind, number>;
-    /** An approved doc whose text is no longer what was approved. Nothing depends on a dropped doc's text. */
+    /** An approved doc whose text is no longer what was approved. Nothing depends on a declined doc's text. */
     changed: boolean;
     /** The finish request on an open doc: how many threads it handed over, how many are left. */
     finish?: { total: number; remaining: number };

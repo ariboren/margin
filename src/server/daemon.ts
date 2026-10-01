@@ -4,7 +4,13 @@ import { basename, dirname, join } from "node:path";
 import type { Server } from "bun";
 import { sidecar } from "../core/log.ts";
 import { LockTimeoutError } from "../core/lock.ts";
-import type { Anchor, DocSettingKey, ThreadId, VerdictState } from "../core/model.ts";
+import {
+    isVerdictState,
+    type Anchor,
+    type DocSettingKey,
+    type ThreadId,
+    type VerdictState,
+} from "../core/model.ts";
 import { isFile, repoRelativePath, resolveLinkedFile } from "./doc-location.ts";
 import { openFile, openableLink, type FileOpener } from "./open-file.ts";
 import { openTab, type Env, type Opener } from "./open-tab.ts";
@@ -548,7 +554,7 @@ function settingKey(value: unknown): DocSettingKey {
 }
 
 function verdictState(value: unknown): VerdictState {
-    if (value !== "open" && value !== "approved" && value !== "dropped") {
+    if (!isVerdictState(value)) {
         throw badRequest("unknown verdict state");
     }
     return value;
