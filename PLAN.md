@@ -78,6 +78,7 @@ Baseline: one read of the sample = 165,788 B, about 41k tokens.
 | `reply` / `resolve` / `suggest` ack         | 24 B                              |
 | `agent-help`                                | 1,700 B                           |
 | 10 seeded threads, full loop, all CLI output | 8 KB total, under 5% of the file |
+| 10 seeded threads handed over, finish pass   | 5,000 B                           |
 
 Turns matter more than bytes: each agent wake re-reads its context. Target 1 wake per batch. Per batch: `pending` (chained with `show` where needed) in one call, then one chained shell call for all replies.
 

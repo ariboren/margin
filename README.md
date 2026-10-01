@@ -50,7 +50,7 @@ Tell the agent the doc is open in margin. Select a sentence, press `c`, type a q
 
 **Agent edits.** By default the agent suggests and you decide, unless your comment asks it to make the change. Turn on "Auto-apply edits" in settings and every agent edit on the doc lands in the file without waiting for you. An applied edit is labelled "Changed by agent" and has a Revert button.
 
-**Approving.** The "Review" control in the top bar records your verdict and carries an optional note to the agent. Approve needs every thread settled. With threads open, the control counts them and offers three ways to settle them. "Review one by one" jumps to the first, and `j` and `k` step through the rest. "Approve as-is" asks you to confirm, then closes them without action and leaves pending suggestions unapplied. "Let the agent resolve" applies the agent's pending suggestions to the file straight away, sends held drafts and hands every other open thread to the agent. The control then reads "Finishing, N left", and "Ready to approve" once they are settled.
+**Approving.** The "Review" control in the top bar records your verdict and carries an optional note to the agent. Approve needs every thread settled. With threads open, the control counts them and offers three ways to settle them. "Review one by one" jumps to the first, and `j` and `k` step through the rest. "Approve as-is" asks you to confirm, then closes them without action and leaves pending suggestions unapplied. "Let agent resolve" applies the agent's pending suggestions to the file straight away, sends held drafts and hands every other open thread to the agent. The control reads "Resolving, N left" while the agent still has them, and "Ready to approve" once they are settled.
 
 **Decline and reopen.** Decline works with threads open. Once a verdict stands, the control shows "Approved" or "Declined", with "Reopen" to take it back. A new comment, reply or suggestion from you reopens the doc. Edits never clear an approval; after one the control reads "Approved, changed since".
 
@@ -160,8 +160,7 @@ Output to the agent is kept small. Bytes of CLI stdout, measured by `bun run bud
 | `reply` / `suggest` / `resolve` acknowledgement | 16                       |
 | `margin agent-help`                             | 1,697                    |
 | 10 threads, full loop, all CLI output           | 4,773 (6.7% of the file) |
-
-A finish pass, where the agent settles the same ten threads after you hand them over, costs 4,310 bytes on top.
+| 10 threads handed to the agent, finish pass     | 4,310                    |
 
 One real Claude Code session (Opus 5.5) resolved 12 threads on a 165,788-byte doc at about 2 requests and $0.05 per thread, at API prices.
 

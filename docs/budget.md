@@ -18,6 +18,7 @@ beside ten new threads; an ordinary batch is 20 B.
 | `reply` / `resolve` / `suggest` ack          |          24 |         16 |          16 |
 | `agent-help`                                 |       1,700 |      1,697 |       1,697 |
 | 10 seeded threads, full loop, all CLI output |       8,000 |      4,773 |       4,996 |
+| 10 seeded threads handed over, finish pass   |       5,000 |      4,310 |       4,419 |
 
 `pending` as plain text against `--json` for the same seeded state:
 
@@ -34,8 +35,8 @@ inline line it was 3,800 B and 4,078 B. The loop now ends with the user approvin
 
 A finish pass, measured as a second loop and kept out of the first one's total, hands the same ten
 threads to the agent and costs 4,310 B (public) and 4,419 B (private): the `finish c1 … c10` watch
-line, one `pending` read with the `finish` header and every thread in full, and ten acks. It has no
-ceiling of its own.
+line, one `pending` read with the `finish` header and every thread in full, and ten acks. Its
+ceiling is 5,000 B (owner, 2026-10-01).
 
 Decision (owner, 2026-09-30): the watch line is compact only, because the real session below tied
 inline and compact at $0.048 per resolved thread; `watch` claims nothing and `pending` is the only
