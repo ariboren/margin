@@ -50,10 +50,18 @@ const options = {
     user: { type: "boolean" },
     force: { type: "boolean" },
     as: { type: "string" },
+    version: { type: "boolean", short: "v" },
 } as const;
 
 export function agentHelp(): string {
     return readFileSync(join(import.meta.dir, "agent-help.md"), "utf8");
+}
+
+export function version(): string {
+    const manifest: unknown = JSON.parse(
+        readFileSync(join(import.meta.dir, "../../package.json"), "utf8"),
+    );
+    return (manifest as { version: string }).version;
 }
 
 /** Heredocs end with a newline the replacement should not carry. */
@@ -94,6 +102,10 @@ export async function run(argv: string[], io: Io, server?: ServerCommands): Prom
     const { values, positionals } = parsed;
     const [command, ...rest] = positionals;
     const write = (text: string) => io.write(text);
+    if (values.version) {
+        io.write(`${version()}\n`);
+        return 0;
+    }
     try {
         switch (command) {
             case undefined:
@@ -166,7 +178,13 @@ async function threadCommand(
     if (!id && !creates) return badArgs(io, "thread id missing");
     if (id && creates) return badArgs(io, "--find starts a thread; drop the id");
 
-    const target = await resolveDoc({ explicit, ...(id ? { id } : {}), cwd: io.cwd, env: io.env });
+    const target = await resolveDoc({
+        explicit,
+        ...(id ? { id } : {}),
+        write: command !== "show",
+        cwd: io.cwd,
+        env: io.env,
+    });
     if (!target.ok) return docFailure(io, target);
     const doc = target.path;
     const agent = resolveAgent({ as: values.as, env: io.env });

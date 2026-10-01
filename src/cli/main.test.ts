@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { createAnchor } from "../core/anchor.ts";
@@ -29,9 +29,12 @@ afterEach(() => {
 });
 
 /** The real bin in a child process, cwd in the sandbox, no daemon anywhere. */
-function margin(args: string[], options: { stdin?: string; env?: Record<string, string> } = {}) {
+function margin(
+    args: string[],
+    options: { stdin?: string; env?: Record<string, string>; cwd?: string } = {},
+) {
     const result = Bun.spawnSync(["bun", MAIN, ...args], {
-        cwd: box.dir,
+        cwd: options.cwd ?? box.dir,
         env: { ...process.env, ...box.env, ...options.env },
         stdin: options.stdin === undefined ? "ignore" : new TextEncoder().encode(options.stdin),
     });
@@ -177,6 +180,29 @@ describe("every contract command against a temp dir with no daemon", () => {
         });
     });
 
+    test("an id finds its doc from another directory; a write only while unresolved", async () => {
+        const elsewhere = join(box.dir, "elsewhere");
+        mkdirSync(elsewhere);
+        await box.comment("cold path", "Why?");
+        margin(["pending", "doc.md"]);
+        const doc = realpathSync(box.doc);
+
+        expect(margin(["show", "c1"], { cwd: elsewhere }).stdout).toStartWith("c1 working ");
+        expect(margin(["reply", "c1", "Hi", "--resolve"], { cwd: elsewhere })).toEqual({
+            code: 0,
+            stdout: "ok c1 resolved\n",
+        });
+        expect(margin(["show", "c1"], { cwd: elsewhere }).stdout).toStartWith("c1 resolved ");
+        expect(margin(["reply", "c1", "Again"], { cwd: elsewhere })).toEqual({
+            code: 1,
+            stdout: `err c1 not-found; pass the doc: ${doc}\n`,
+        });
+        expect(margin(["show", "c7"], { cwd: elsewhere })).toEqual({
+            code: 1,
+            stdout: `err c7 not-found; pass the doc: ${doc}\n`,
+        });
+    });
+
     test("with no recent docs the error says to pass the doc", () => {
         expect(margin(["show", "c1"])).toEqual({
             code: 1,
@@ -228,6 +254,15 @@ describe("every contract command against a temp dir with no daemon", () => {
         expect(margin(["reply"]).stdout).toBe("err bad-args; thread id missing\n");
         expect(margin(["suggest", "c1"]).code).toBe(1);
         expect(margin(["reply", "c1", "--nope"]).stdout).toStartWith("err bad-args;");
+    });
+
+    test("--version and -v print the package version", async () => {
+        const manifest: unknown = await Bun.file(
+            join(import.meta.dir, "../../package.json"),
+        ).json();
+        const expected = `${(manifest as { version: string }).version}\n`;
+        expect(margin(["--version"])).toEqual({ code: 0, stdout: expected });
+        expect(margin(["-v"])).toEqual({ code: 0, stdout: expected });
     });
 
     test("setup --user --force installs the skill under HOME", () => {
