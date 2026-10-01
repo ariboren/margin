@@ -105,14 +105,19 @@ function awaitsAnswer(events: readonly Event[], id: ThreadId): boolean {
 
 /**
  * The doc a command acts on: the explicit argument, then `MARGIN_DOC`, then the recent docs.
- * Without an id only those under cwd count. With one, a doc under cwd holding it wins; failing
- * that, any recent doc holding it, because a doc is often opened from another directory. A write
- * (`write`) counts a doc only while that thread is unresolved there: ids repeat across docs, so
- * a settled `c3` under cwd must not hide the open one elsewhere, and a mistyped id must not land
- * a reply on an old doc that happens to hold it, while a read on the wrong doc costs nothing.
- * When no doc has the thread unresolved, a write still goes to the one cwd doc holding it, whose
- * own refusal says why. Anything but one match is an error naming the candidates, newest first.
- * The doc must be a file.
+ * Without an id only those under cwd count. A read with an id takes the cwd doc holding it, else
+ * any recent doc holding it, because a doc is often opened from another directory.
+ *
+ * Ids repeat across docs, so a write (`write`) with an id is narrower:
+ * 1. a cwd doc where the thread is unresolved;
+ * 2. no cwd doc holds the id: an outside doc where it is unresolved, so a mistyped id cannot
+ *    land on an old doc;
+ * 3. a cwd doc holds it resolved and an outside doc holds it unresolved: refused, naming both.
+ *    Either guess can be wrong, and a wrong `resolve` silently closes the other doc's thread;
+ * 4. a cwd doc holds it resolved and no outside doc holds it unresolved: the cwd doc, whose own
+ *    answer is then right.
+ *
+ * Anything but one match is an error naming the candidates, newest first. The doc must be a file.
  */
 export async function resolveDoc(input: {
     explicit?: string;
@@ -173,9 +178,15 @@ export async function resolveDoc(input: {
         holders.push(doc);
         if (!write || awaitsAnswer(events, id)) usable.push(doc);
     }
+    if (localHolders.length > 0) {
+        if (usable.length > 0) {
+            // Leaves room for an outside doc, so the line always shows both sides of the clash.
+            return fail("not-unique", [...localHolders.slice(0, NAMED_MAX - 1), ...usable]);
+        }
+        if (localHolders.length === 1) return one(localHolders[0]!);
+        return fail("not-unique", localHolders);
+    }
     if (usable.length === 1) return one(usable[0]!);
     if (usable.length > 1) return fail("not-unique", usable);
-    if (localHolders.length === 1) return one(localHolders[0]!);
-    if (localHolders.length > 1) return fail("not-unique", localHolders);
     return fail("not-found", holders.length > 0 ? holders : local.length > 0 ? local : recent);
 }

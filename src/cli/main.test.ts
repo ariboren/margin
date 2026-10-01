@@ -203,6 +203,36 @@ describe("every contract command against a temp dir with no daemon", () => {
         });
     });
 
+    test("a write never crosses from a resolved thread here to an open one elsewhere", async () => {
+        const inner = join(box.dir, "inner");
+        mkdirSync(inner);
+        const local = join(inner, "doc.md");
+        copyFileSync(box.doc, local);
+        await createThread(local, (id) => [
+            { type: "comment", by: "user", id, text: "Local", draft: false },
+        ]);
+        margin(["pending", "inner/doc.md"]);
+        expect(margin(["resolve", "inner/doc.md", "c1"]).stdout).toBe("ok c1 resolved\n");
+        await box.note("Outside");
+        margin(["pending", "doc.md"]);
+
+        const refused = {
+            code: 1,
+            stdout: `err c1 not-unique; pass the doc: doc.md ${realpathSync(box.doc)}\n`,
+        };
+        expect(margin(["resolve", "c1"], { cwd: inner })).toEqual(refused);
+        expect(margin(["reply", "c1", "Hi"], { cwd: inner })).toEqual(refused);
+        const outside = (await box.state()).threads.get("c1")!;
+        expect(outside.state).toBe("working");
+        expect(outside.messages).toHaveLength(1);
+
+        expect(margin(["resolve", "doc.md", "c1"]).stdout).toBe("ok c1 resolved\n");
+        expect(margin(["reply", "c1", "Hi"], { cwd: inner })).toEqual({
+            code: 1,
+            stdout: "err c1 resolved\n",
+        });
+    });
+
     test("with no recent docs the error says to pass the doc", () => {
         expect(margin(["show", "c1"])).toEqual({
             code: 1,
