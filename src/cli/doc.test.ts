@@ -121,6 +121,30 @@ describe("a write takes an outside doc only while the thread is unresolved", () 
         );
     });
 
+    test("a thread resolved under the working directory does not hide the open one outside", async () => {
+        const local = await recorded("work/doc.md", 1);
+        await resolveThread(local, "c1");
+        const outside = await recorded("elsewhere/doc.md", 1);
+        expect(await find("c1", { write: true })).toEqual({ ok: true, path: outside });
+        expect(await find("c1")).toEqual({ ok: true, path: local });
+
+        await resolveThread(outside, "c1");
+        expect(await find("c1", { write: true })).toEqual({ ok: true, path: local });
+    });
+
+    test("of several holders under the working directory, a write takes the unresolved one", async () => {
+        const settled = await recorded("work/a.md", 1);
+        await resolveThread(settled, "c1");
+        const live = await recorded("work/b.md", 1);
+        expect(await find("c1", { write: true })).toEqual({ ok: true, path: live });
+        expect(await find("c1")).toEqual(failure("c1", "not-unique", "pass the doc: b.md a.md"));
+
+        await resolveThread(live, "c1");
+        expect(await find("c1", { write: true })).toEqual(
+            failure("c1", "not-unique", "pass the doc: b.md a.md"),
+        );
+    });
+
     test("under the working directory a resolved thread still resolves its doc", async () => {
         const doc = await recorded("work/doc.md", 1);
         await resolveThread(doc, "c1");

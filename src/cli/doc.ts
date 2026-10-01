@@ -107,10 +107,12 @@ function awaitsAnswer(events: readonly Event[], id: ThreadId): boolean {
  * The doc a command acts on: the explicit argument, then `MARGIN_DOC`, then the recent docs.
  * Without an id only those under cwd count. With one, a doc under cwd holding it wins; failing
  * that, any recent doc holding it, because a doc is often opened from another directory. A write
- * (`write`) takes an outside doc only while that thread is unresolved: ids repeat across docs, so
- * a mistyped id must not land a reply on an old doc that happens to hold it, while a read on the
- * wrong doc costs nothing. Anything but one match is an error naming the candidates, newest
- * first. The doc must be a file.
+ * (`write`) counts a doc only while that thread is unresolved there: ids repeat across docs, so
+ * a settled `c3` under cwd must not hide the open one elsewhere, and a mistyped id must not land
+ * a reply on an old doc that happens to hold it, while a read on the wrong doc costs nothing.
+ * When no doc has the thread unresolved, a write still goes to the one cwd doc holding it, whose
+ * own refusal says why. Anything but one match is an error naming the candidates, newest first.
+ * The doc must be a file.
  */
 export async function resolveDoc(input: {
     explicit?: string;
@@ -152,11 +154,15 @@ export async function resolveDoc(input: {
     }
 
     const localHolders: string[] = [];
+    const localUsable: string[] = [];
     for (const doc of local) {
-        if (mentions((await readLog(doc)).events, id)) localHolders.push(doc);
+        const { events } = await readLog(doc);
+        if (!mentions(events, id)) continue;
+        localHolders.push(doc);
+        if (!write || awaitsAnswer(events, id)) localUsable.push(doc);
     }
-    if (localHolders.length === 1) return one(localHolders[0]!);
-    if (localHolders.length > 1) return fail("not-unique", localHolders);
+    if (localUsable.length === 1) return one(localUsable[0]!);
+    if (localUsable.length > 1) return fail("not-unique", localUsable);
 
     const holders: string[] = [];
     const usable: string[] = [];
@@ -169,5 +175,7 @@ export async function resolveDoc(input: {
     }
     if (usable.length === 1) return one(usable[0]!);
     if (usable.length > 1) return fail("not-unique", usable);
+    if (localHolders.length === 1) return one(localHolders[0]!);
+    if (localHolders.length > 1) return fail("not-unique", localHolders);
     return fail("not-found", holders.length > 0 ? holders : local.length > 0 ? local : recent);
 }
