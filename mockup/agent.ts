@@ -36,8 +36,6 @@ const replies = {
     suggestion: "Here's a tighter version.",
     retry: "Understood. Here's another take.",
     applied: "Applied directly. Revert if it reads worse.",
-    downgraded:
-        "I'd have applied this directly, but this doc is suggestions only, so it's a suggestion.",
 };
 
 /**
@@ -90,17 +88,18 @@ function answer(store: MemoryStore, wake: Wake): void {
 }
 
 function suggestFor(store: MemoryStore, thread: Thread, retry: boolean, apply: boolean): void {
-    const quote = retry && thread.suggestion ? thread.suggestion.replace : thread.anchor.exact;
-    const replace = proposeEdit(quote);
+    // A doc note has nothing to edit in place; the scripted agent just answers it.
+    const quote = retry && thread.suggestion ? thread.suggestion.replace : thread.anchor?.exact;
+    const replace = quote === undefined ? null : proposeEdit(quote);
     if (replace === null) {
         store.agentReply(thread.id, replies.noEdit);
         return;
     }
     const snapshot = store.snapshot();
-    const willApply = apply || thread.autoApply || snapshot.settings.autoApply;
+    const willApply = apply || snapshot.settings.autoApply;
     const note = !willApply ? (retry ? replies.retry : replies.suggestion) : undefined;
-    const downgraded = store.agentSuggest(thread.id, replace, { apply, note });
+    store.agentSuggest(thread.id, replace, { apply, note });
     if (willApply) {
-        store.agentReply(thread.id, downgraded ? replies.downgraded : replies.applied);
+        store.agentReply(thread.id, replies.applied);
     }
 }

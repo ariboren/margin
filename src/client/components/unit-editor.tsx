@@ -2,6 +2,7 @@ import type { JSX } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { DocSnapshot, DocStore, SaveResult, Unit } from "../../core/model.ts";
 import { copyText } from "../clipboard.ts";
+import { reducedMotion } from "../motion.ts";
 import {
     beginSession,
     follow,
@@ -23,12 +24,54 @@ interface UnitEditing {
     editing: Unit | null;
     begin: (unit: Unit) => void;
     editorFor: (unit: Unit) => JSX.Element | null;
-    /** The draft of a unit deleted under its editor, shown apart from the doc; else null. */
-    stranded: JSX.Element | null;
+    /**
+     * What the editor shows apart from the doc, mounted once at page level: the keys hint while an
+     * editor is open, the conflict dock in its place, and the draft of a unit deleted under its
+     * editor.
+     */
+    overlay: JSX.Element;
 }
 
 type Update = (patch: Partial<EditorSession>) => void;
 
+/** The rendered block's footprint, which its editor keeps so nothing below it moves. */
+interface UnitBox {
+    height: number;
+    marginTop: number;
+    marginBottom: number;
+    /** The block's padding and border, as a CSS padding value: the text starts inside them. */
+    padding: string;
+}
+
+const sides = ["top", "right", "bottom", "left"] as const;
+
+function measureUnit(unit: Unit): UnitBox | null {
+    if (unit.kind === "tableCell") {
+        return null;
+    }
+    const element = document.querySelector(
+        `.doc [data-unit="${unit.start}"][data-kind="${unit.kind}"]:not([data-editing])`,
+    );
+    if (!element) {
+        return null;
+    }
+    // The editor takes the place of the whole block, which for a list or table is its hatch.
+    const swapped = element.parentElement?.classList.contains("source-hatch")
+        ? element.parentElement
+        : element;
+    const style = getComputedStyle(swapped);
+    const edge = (side: (typeof sides)[number]) =>
+        Number.parseFloat(style.getPropertyValue(`padding-${side}`)) +
+        Number.parseFloat(style.getPropertyValue(`border-${side}-width`));
+    return {
+        height: swapped.getBoundingClientRect().height,
+        marginTop: Number.parseFloat(style.marginTop),
+        marginBottom: Number.parseFloat(style.marginBottom),
+        padding: sides.map((side) => `${edge(side)}px`).join(" "),
+    };
+}
+
+/** Source that is markup or layout edits in mono; prose, down to one list item or cell, in the serif. */
 const monoKinds = new Set<Unit["kind"]>([
     "code",
     "table",
@@ -39,11 +82,52 @@ const monoKinds = new Set<Unit["kind"]>([
     "definition",
 ]);
 
+export function textareaClass(kind: Unit["kind"]): string {
+    return monoKinds.has(kind) ? "unit-textarea mono" : "unit-textarea";
+}
+
 function draftKey(path: string, unit: Unit): string {
     return `margin:draft:${path}:${unit.kind}:${unit.hash}`;
 }
 
 let sessions = 0;
+
+const hintId = "unit-editor-hint";
+
+/** `submitKeys` takes ⌘↵ or Ctrl+Enter; the hint names the one this keyboard has. */
+export function submitKeyLabel(platform: string): string {
+    return /mac|iphone|ipad|ipod/i.test(platform) ? "⌘↵" : "Ctrl+↵";
+}
+
+function platformName(): string {
+    try {
+        const hints = (navigator as Navigator & { userAgentData?: { platform?: string } })
+            .userAgentData;
+        return hints?.platform || navigator.platform || "";
+    } catch {
+        return "";
+    }
+}
+
+const submitLabel = submitKeyLabel(platformName());
+
+/**
+ * One chip for every editor, so moving from block to block doesn't replay its entrance. It stays
+ * mounted and only toggles, which lets it fade out after the editor is gone.
+ */
+function EditHint({ open }: { open: boolean }): JSX.Element {
+    return (
+        <p id={hintId} class="unit-editor-hint" data-open={open ? "" : undefined}>
+            <span class="unit-editor-hint-long">
+                <span class="pill pill-editing">Editing</span> · click away or{" "}
+                <kbd>{submitLabel}</kbd> to save · <kbd>Esc</kbd> to cancel
+            </span>
+            <span class="unit-editor-hint-short">
+                <kbd>{submitLabel}</kbd> save · <kbd>Esc</kbd> cancel
+            </span>
+        </p>
+    );
+}
 
 /**
  * Click a unit to edit its raw markdown; blur saves through `saveUnit` (compare-and-swap on the text
@@ -89,6 +173,8 @@ export function useUnitEditing(
         (patch) => setSession((current) => (current ? { ...current, ...patch } : current)),
         [],
     );
+    // Measured as the session opens, while the rendered block is still there to measure.
+    const boxes = useRef(new Map<number, UnitBox>());
 
     const begin = useCallback(
         (unit: Unit) => {
@@ -99,8 +185,13 @@ export function useUnitEditing(
             }
             const before = source.slice(unit.start, unit.end);
             const key = draftKey(snapshot.path, unit);
+            const id = ++sessions;
+            const box = measureUnit(unit);
+            if (box) {
+                boxes.current.set(id, box);
+            }
             const fresh: EditorSession = {
-                id: ++sessions,
+                id,
                 unit,
                 roots: units,
                 version: snapshot.version,
@@ -119,6 +210,7 @@ export function useUnitEditing(
     const close = useCallback(() => {
         setSession(null);
         setNudge(null);
+        boxes.current.clear();
     }, []);
 
     const editorFor = (unit: Unit): JSX.Element | null => {
@@ -131,6 +223,7 @@ export function useUnitEditing(
                 store={store}
                 snapshot={snapshot}
                 session={session}
+                box={boxes.current.get(session.id) ?? null}
                 update={update}
                 close={close}
                 onReplaced={onReplaced}
@@ -138,22 +231,36 @@ export function useUnitEditing(
         );
     };
 
+    const live = session && !session.gone ? session : null;
     return {
-        editing: session && !session.gone ? session.unit : null,
+        editing: live?.unit ?? null,
         begin,
         editorFor,
-        stranded: session?.gone ? (
-            <StrandedEditor
-                store={store}
-                snapshot={snapshot}
-                session={session}
-                update={update}
-                close={close}
-                record={stranded}
-                key={session.id}
-                nudge={nudgeFor(nudge, session.id)}
-            />
-        ) : null,
+        overlay: (
+            <>
+                <EditHint open={live !== null && live.theirs === null} />
+                {live && live.theirs !== null ? (
+                    <ConflictDock
+                        key={live.id}
+                        snapshot={snapshot}
+                        session={live}
+                        update={update}
+                    />
+                ) : null}
+                {session?.gone ? (
+                    <StrandedEditor
+                        store={store}
+                        snapshot={snapshot}
+                        session={session}
+                        update={update}
+                        close={close}
+                        record={stranded}
+                        key={session.id}
+                        nudge={nudgeFor(nudge, session.id)}
+                    />
+                ) : null}
+            </>
+        ),
     };
 }
 
@@ -169,10 +276,14 @@ function UnitEditor({
     store,
     snapshot,
     session,
+    box,
     update,
     close,
     onReplaced,
-}: UnitEditorProps & { onReplaced: (replacement: Replacement) => void }): JSX.Element {
+}: UnitEditorProps & {
+    box: UnitBox | null;
+    onReplaced: (replacement: Replacement) => void;
+}): JSX.Element {
     const textarea = useRef<HTMLTextAreaElement>(null);
     const done = useRef(false);
     const { unit } = session;
@@ -196,6 +307,15 @@ function UnitEditor({
             done.current = true;
         };
     }, []);
+
+    // Keep mine or Take theirs unmounts the dock under the keyboard; typing resumes in the editor.
+    const conflicted = useRef(false);
+    useEffect(() => {
+        if (conflicted.current && session.theirs === null) {
+            textarea.current?.focus({ preventScroll: true });
+        }
+        conflicted.current = session.theirs !== null;
+    }, [session.theirs]);
 
     const save = async () => {
         if (done.current || session.theirs !== null) {
@@ -254,73 +374,117 @@ function UnitEditor({
         remember(key, null);
         close();
     };
-
-    const changedBy = changedByWhom(snapshot);
+    const keys = submitKeys(() => textarea.current?.blur(), cancel);
 
     return (
         <div
             class={cell ? "unit-editor unit-editor-cell" : "unit-editor"}
+            style={
+                box
+                    ? { marginTop: `${box.marginTop}px`, marginBottom: `${box.marginBottom}px` }
+                    : {}
+            }
             data-editing=""
             data-unit={unit.start}
             data-kind={unit.kind}
         >
-            {session.theirs !== null ? (
-                <div class="conflict-bar" role="alert">
-                    <span>Changed {changedBy} while you were editing.</span>
-                    <span class="conflict-actions">
-                        <button
-                            type="button"
-                            class="button button-quiet"
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={() =>
-                                update({
-                                    before: session.theirs ?? "",
-                                    theirs: null,
-                                    keptMine: true,
-                                })
-                            }
-                        >
-                            Keep mine
-                        </button>
-                        <button
-                            type="button"
-                            class="button"
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={() => {
-                                const theirs = session.theirs ?? "";
-                                remember(key, null);
-                                update({
-                                    before: theirs,
-                                    draft: theirs,
-                                    theirs: null,
-                                    keptMine: false,
-                                });
-                            }}
-                        >
-                            Take theirs
-                        </button>
-                    </span>
-                </div>
-            ) : null}
             <textarea
                 ref={textarea}
-                class={monoKinds.has(unit.kind) ? "unit-textarea mono" : "unit-textarea"}
+                class={textareaClass(unit.kind)}
+                style={box ? { minHeight: `${box.height}px`, padding: box.padding } : {}}
+                rows={1}
                 value={session.draft}
                 spellcheck
                 aria-label="Edit markdown"
+                aria-describedby={hintId}
                 onInput={(event) => {
                     const draft = event.currentTarget.value;
                     remember(key, draft);
                     update({ draft });
                 }}
                 onBlur={() => void save()}
-                onKeyDown={submitKeys(() => textarea.current?.blur(), cancel)}
+                onKeyDown={(event) => {
+                    if (session.theirs !== null && tabWithinConflict(event)) {
+                        return;
+                    }
+                    keys(event);
+                }}
             />
-            {cell ? null : (
-                <p class="unit-editor-hint">Markdown · click away or ⌘↵ to save · Esc to cancel</p>
-            )}
         </div>
     );
+}
+
+/**
+ * The unit changed under an open editor: docked at the bottom in the hint's place, so the block
+ * keeps its height. The buttons keep the editor focused; its blur does not save while a conflict
+ * stands.
+ */
+function ConflictDock({
+    snapshot,
+    session,
+    update,
+}: {
+    snapshot: DocSnapshot;
+    session: EditorSession;
+    update: Update;
+}): JSX.Element {
+    const theirs = session.theirs ?? "";
+    return (
+        <div
+            class="conflict-bar conflict-dock"
+            role="alert"
+            onKeyDown={(event) => void tabWithinConflict(event)}
+        >
+            <span>Changed {changedByWhom(snapshot)} while you were editing.</span>
+            <span class="conflict-actions">
+                <button
+                    type="button"
+                    class="button button-quiet"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => update({ before: theirs, theirs: null, keptMine: true })}
+                >
+                    Keep mine
+                </button>
+                <button
+                    type="button"
+                    class="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                        remember(session.draftKey, null);
+                        update({ before: theirs, draft: theirs, theirs: null, keptMine: false });
+                    }}
+                >
+                    Take theirs
+                </button>
+            </span>
+        </div>
+    );
+}
+
+/** The next stop in a ring of `count` focus stops, wrapping both ways. */
+export function ringStep(index: number, count: number, back: boolean): number {
+    return (index + (back ? count - 1 : 1)) % count;
+}
+
+/**
+ * While a conflict stands, Tab and Shift+Tab cycle the editor and the dock's buttons. The dock
+ * sits outside the editor in the tree, so the browser's order would pass it by one way and leave
+ * it for the top of the page the other. True when the key moved focus.
+ */
+function tabWithinConflict(event: KeyboardEvent): boolean {
+    if (event.key !== "Tab") {
+        return false;
+    }
+    const area = document.querySelector<HTMLElement>("[data-editing] textarea");
+    const buttons = document.querySelectorAll<HTMLElement>(".conflict-dock button");
+    const ring = area ? [area, ...buttons] : [...buttons];
+    const index = ring.indexOf(event.target as HTMLElement);
+    if (index < 0 || ring.length < 2) {
+        return false;
+    }
+    event.preventDefault();
+    ring[ringStep(index, ring.length, event.shiftKey)]!.focus();
+    return true;
 }
 
 function changedByWhom(snapshot: DocSnapshot): string {
@@ -357,6 +521,9 @@ function StrandedEditor({
         shaken.current = nudge;
         setStatus("busy");
         textarea.current?.focus({ preventScroll: true });
+        if (reducedMotion()) {
+            return;
+        }
         panel.current?.animate(
             [
                 { transform: "translateX(-50%)" },
@@ -449,7 +616,7 @@ function StrandedEditor({
             </div>
             <textarea
                 ref={textarea}
-                class={monoKinds.has(session.unit.kind) ? "unit-textarea mono" : "unit-textarea"}
+                class={textareaClass(session.unit.kind)}
                 value={session.draft}
                 rows={6}
                 spellcheck

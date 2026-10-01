@@ -1,6 +1,8 @@
 import { parseDoc } from "../core/blocks.ts";
 import type {
+    AgentIdentity,
     Anchor,
+    Connection,
     DocSettingKey,
     DocSnapshot,
     DocStore,
@@ -8,9 +10,11 @@ import type {
     Offset,
     ParsedDoc,
     SaveResult,
+    StoreStatus,
     ThreadId,
 } from "../core/model.ts";
 import {
+    DEV_EVENT,
     SNAPSHOT_EVENT,
     TOKEN_PARAM,
     routes,
@@ -21,20 +25,16 @@ import {
     type Mutations,
     type OpenFileResponse,
     type OpenUrlResponse,
+    type RetractResult,
+    type Seq,
     type WireSnapshot,
 } from "../server/protocol.ts";
 import { recall, remember } from "./storage.ts";
+import type { ThreadActions } from "./undo.ts";
 
 /** What the page adds to `DocSnapshot`: presence read by the daemon, not folded from the log. */
-export type ClientSnapshot = DocSnapshot & { agentWatching?: boolean };
-
-export type Connection = "live" | "reconnecting" | "lost";
-
-export interface StoreStatus {
-    connection: Connection;
-    /** The last request the daemon refused or never answered, until the next one succeeds. */
-    problem?: string;
-}
+/** The daemon's snapshot plus its presence reading; absent in a store with no daemon. */
+export type ClientSnapshot = DocSnapshot & { agents?: AgentIdentity[] };
 
 export interface Transport {
     fetchSnapshot(): Promise<WireSnapshot>;
@@ -57,6 +57,9 @@ export class RequestError extends Error {
         this.name = "RequestError";
     }
 }
+
+/** Fired on `window` just before a dev reload, so the page can keep its place. */
+export const DEV_RELOAD_EVENT = "margin:dev-reload";
 
 /** A lost stream (403 after a daemon restart, or no daemon) is retried at this pace. */
 const LOST_RETRY_MS = 3_000;
@@ -92,12 +95,21 @@ export function httpTransport(docId: DocId, token: string): Transport {
             let source: EventSource | undefined;
             let retry: ReturnType<typeof setTimeout> | undefined;
             let closed = false;
+            let devStamp: string | undefined;
             const open = () => {
                 // EventSource cannot send headers; the daemon accepts the token in the query.
                 source = new EventSource(`${routes.events(docId)}?${TOKEN_PARAM}=${token}`);
                 source.onopen = () => onConnection("live");
                 source.addEventListener(SNAPSHOT_EVENT, (event) => {
                     onSnapshot(JSON.parse((event as MessageEvent<string>).data) as WireSnapshot);
+                });
+                source.addEventListener(DEV_EVENT, (event) => {
+                    const stamp = (event as MessageEvent<string>).data;
+                    if (devStamp !== undefined && stamp !== devStamp) {
+                        window.dispatchEvent(new Event(DEV_RELOAD_EVENT));
+                        location.reload();
+                    }
+                    devStamp = stamp;
                 });
                 source.onerror = () => {
                     if (source?.readyState !== EventSource.CLOSED) {
@@ -212,28 +224,50 @@ export class ServerStore implements DocStore {
         return (await this.call("suggest", input)).id;
     }
 
+    /** The thread actions with the seq of the event each appended, which the undo stack records. */
+    readonly actions: ThreadActions = {
+        reply: async (id, text) => unversioned(await this.call("reply", { id, text })),
+        reject: async (id, note) =>
+            unversioned(await this.call("reject", note === undefined ? { id } : { id, note })),
+        resolve: async (id) => unversioned(await this.call("resolve", { id })),
+        reopen: async (id) => unversioned(await this.call("reopen", { id })),
+    };
+
     async reply(id: ThreadId, text: string): Promise<void> {
-        await this.call("reply", { id, text });
+        await this.actions.reply(id, text);
     }
 
-    async accept(id: ThreadId): Promise<SaveResult> {
-        return saveResult(await this.call("accept", { id }));
+    async accept(id: ThreadId): Promise<SaveResult & Partial<Seq>> {
+        return unversioned(await this.call("accept", { id }));
     }
 
     async reject(id: ThreadId, note?: string): Promise<void> {
-        await this.call("reject", note === undefined ? { id } : { id, note });
+        await this.actions.reject(id, note);
     }
 
     async resolve(id: ThreadId): Promise<void> {
-        await this.call("resolve", { id });
+        await this.actions.resolve(id);
     }
 
     async reopen(id: ThreadId): Promise<void> {
-        await this.call("reopen", { id });
+        await this.actions.reopen(id);
+    }
+
+    /** Takes back the user's own event `seq` on `id`; refused once the agent has read it. */
+    async retract(id: ThreadId, seq: number): Promise<RetractResult> {
+        return unversioned(await this.call("retract", { id, seq }));
+    }
+
+    async deleteThread(id: ThreadId): Promise<void> {
+        await this.call("delete", { id });
+    }
+
+    async undeleteThread(id: ThreadId): Promise<void> {
+        await this.call("undelete", { id });
     }
 
     async revert(id: ThreadId): Promise<SaveResult> {
-        return saveResult(await this.call("revert", { id }));
+        return unversioned(await this.call("revert", { id }));
     }
 
     /**
@@ -265,8 +299,8 @@ export class ServerStore implements DocStore {
         await this.call("send-all", {});
     }
 
-    async setSetting(key: DocSettingKey, value: boolean, id?: ThreadId): Promise<void> {
-        await this.call("setting", id === undefined ? { key, value } : { key, value, id });
+    async setSetting(key: DocSettingKey, value: boolean): Promise<void> {
+        await this.call("setting", { key, value });
     }
 
     /** Per viewer: the banner stays dismissed for this outside change, across reloads. */
@@ -357,7 +391,7 @@ export class ServerStore implements DocStore {
                     : undefined,
             missing: wire.missing,
             version: wire.version,
-            agentWatching: wire.agentWatching,
+            agents: wire.agents,
         };
     }
 
@@ -369,9 +403,9 @@ export class ServerStore implements DocStore {
     }
 }
 
-function saveResult(response: SaveResult & { version: number }): SaveResult {
+function unversioned<T extends object>(response: T & { version: number }): T {
     const { version: _, ...result } = response;
-    return result as SaveResult;
+    return result as T;
 }
 
 function describe(caught: unknown): string {

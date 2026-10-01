@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "preact/hooks";
 import { useMedia } from "./use-media.ts";
 
-type ThemeChoice = "system" | "light" | "dark";
+export type ThemeChoice = "system" | "light" | "dark";
 
 const storageKey = "margin:theme";
 
-function readChoice(): ThemeChoice {
+export function readChoice(): ThemeChoice {
     const preset = document.documentElement.dataset.theme;
     if (preset === "light" || preset === "dark") {
         return preset;
@@ -18,17 +18,22 @@ function readChoice(): ThemeChoice {
     }
 }
 
+/** Sets the theme attribute the stylesheet reads; main.tsx applies the stored choice before the first paint. */
+export function applyTheme(choice: ThemeChoice): void {
+    const root = document.documentElement;
+    if (choice === "system") {
+        delete root.dataset.theme;
+    } else {
+        root.dataset.theme = choice;
+    }
+}
+
 export function useTheme(): { dark: boolean; toggle: () => void } {
     const [choice, setChoice] = useState<ThemeChoice>(readChoice);
     const systemDark = useMedia("(prefers-color-scheme: dark)");
 
     useEffect(() => {
-        const root = document.documentElement;
-        if (choice === "system") {
-            delete root.dataset.theme;
-        } else {
-            root.dataset.theme = choice;
-        }
+        applyTheme(choice);
         try {
             localStorage.setItem(storageKey, choice);
         } catch {

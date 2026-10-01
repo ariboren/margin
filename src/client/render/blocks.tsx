@@ -3,8 +3,8 @@ import type { ComponentChildren, JSX } from "preact";
 import type { Unit } from "../../core/model.ts";
 import { unitKey } from "../view-model.ts";
 import { useRender, type RenderContext } from "./context.ts";
+import { DocLink } from "./link.tsx";
 import { SourceText } from "./source-text.tsx";
-import { linkKind } from "../links.ts";
 
 function range(node: Nodes, shift: number): { start: number; end: number } {
     return { start: node.position!.start.offset! + shift, end: node.position!.end.offset! + shift };
@@ -39,7 +39,12 @@ function Block({ node }: { node: RootContent }): JSX.Element | null {
     if (unit) {
         const editor = context.editorFor(unit);
         if (editor) {
-            return <>{editor}</>;
+            // A list item's editor stays in its li, so the items after it keep their numbers.
+            return node.type === "listItem" ? (
+                <li class={node.checked == null ? undefined : "task"}>{editor}</li>
+            ) : (
+                <>{editor}</>
+            );
         }
     }
     const props = unitProps(unit);
@@ -262,28 +267,12 @@ function Inline({ node }: { node: PhrasingContent }): JSX.Element | null {
                     <Phrasing nodes={node.children} />
                 </s>
             );
-        case "link": {
-            const kind = linkKind(node.url);
-            if (kind === "inert") {
-                return (
-                    <span class="md-link-inert" title={node.url}>
-                        <Phrasing nodes={node.children} />
-                    </span>
-                );
-            }
+        case "link":
             return (
-                <a
-                    href={node.url}
-                    title={node.title ?? undefined}
-                    {...(kind === "fragment"
-                        ? {}
-                        : { target: "_blank", rel: "noreferrer noopener" })}
-                    onClick={(event) => render.followLink(event, node.url)}
-                >
+                <DocLink url={node.url} title={node.title} followLink={render.followLink}>
                     <Phrasing nodes={node.children} />
-                </a>
+                </DocLink>
             );
-        }
         case "linkReference":
             return (
                 <span class="md-ref">

@@ -62,10 +62,10 @@ export class MemoryStore implements DocStore {
     private source: string;
     private doc: ParsedDoc;
     private readonly threads = new Map<ThreadId, Thread>();
+    private readonly deleted = new Set<ThreadId>();
     private readonly edits: EditEvent[] = [];
     private readonly settings: DocSettings = {
         hold: false,
-        suggestionsOnly: false,
         autoApply: false,
     };
     private seq = 0;
@@ -98,7 +98,7 @@ export class MemoryStore implements DocStore {
         };
     }
 
-    async comment(input: { anchor: Anchor; text: string }): Promise<ThreadId> {
+    async comment(input: { anchor?: Anchor; text: string }): Promise<ThreadId> {
         const thread = this.open(input.anchor, "user", input.text);
         this.emit();
         this.wakeIfOpen([thread], "new");
@@ -171,6 +171,20 @@ export class MemoryStore implements DocStore {
         this.emit();
     }
 
+    async deleteThread(id: ThreadId): Promise<void> {
+        this.thread(id);
+        this.deleted.add(id);
+        this.tick();
+        this.emit();
+    }
+
+    async undeleteThread(id: ThreadId): Promise<void> {
+        this.thread(id);
+        this.deleted.delete(id);
+        this.tick();
+        this.emit();
+    }
+
     async revert(id: ThreadId): Promise<SaveResult> {
         const thread = this.thread(id);
         const applied = thread.applied;
@@ -226,7 +240,7 @@ export class MemoryStore implements DocStore {
     }
 
     async sendAll(): Promise<void> {
-        const drafts = [...this.threads.values()].filter((thread) => thread.state === "draft");
+        const drafts = this.live().filter((thread) => thread.state === "draft");
         for (const thread of drafts) {
             this.setState(thread, "open");
         }
@@ -234,12 +248,8 @@ export class MemoryStore implements DocStore {
         this.wakeIfOpen(drafts, "new");
     }
 
-    async setSetting(key: DocSettingKey, value: boolean, id?: ThreadId): Promise<void> {
-        if (id && key === "autoApply") {
-            this.thread(id).autoApply = value;
-        } else {
-            this.settings[key] = value;
-        }
+    async setSetting(key: DocSettingKey, value: boolean): Promise<void> {
+        this.settings[key] = value;
         this.tick();
         this.emit();
     }
@@ -252,7 +262,7 @@ export class MemoryStore implements DocStore {
     // The agent side, driven by the scripted agent. The real agent reaches these through the CLI.
 
     agentClaim(ids: ThreadId[]): void {
-        for (const id of ids) {
+        for (const id of ids.filter((claimed) => !this.deleted.has(claimed))) {
             const thread = this.thread(id);
             thread.claimed = true;
             if (thread.state === "open") {
@@ -263,36 +273,25 @@ export class MemoryStore implements DocStore {
         this.emit();
     }
 
+    /** Like the CLI, the agent's writes to a deleted thread are refused. */
     agentReply(id: ThreadId, text: string): void {
+        if (this.deleted.has(id)) {
+            return;
+        }
         const thread = this.thread(id);
         this.message(thread, "agent", text);
         this.setState(thread, "replied");
         this.emit();
     }
 
-    /** `margin suggest`, with `--apply` when `apply` is set. Returns whether apply was downgraded. */
-    agentSuggest(
-        id: ThreadId,
-        replace: string,
-        options: { apply: boolean; note?: string },
-    ): boolean {
+    /** `margin suggest`, with `--apply` when `apply` is set. */
+    agentSuggest(id: ThreadId, replace: string, options: { apply: boolean; note?: string }): void {
+        if (this.deleted.has(id)) {
+            return;
+        }
         const thread = this.thread(id);
-        const apply = options.apply || thread.autoApply || this.settings.autoApply;
-        const downgraded = apply && this.settings.suggestionsOnly;
-        if (apply && !downgraded) {
-            const before = this.anchoredText(thread);
-            const result =
-                before === null ? null : this.replaceAnchored(thread, replace, "apply", "agent");
-            if (result?.ok && before !== null) {
-                const seq = this.edits[this.edits.length - 1]!.seq;
-                thread.applied = {
-                    seq,
-                    start: thread.anchor.hint,
-                    before,
-                    after: replace,
-                    reverted: false,
-                };
-            }
+        if (options.apply || this.settings.autoApply) {
+            this.applyAgentEdit(thread, replace);
         } else {
             thread.suggestion = { seq: this.tick(), by: "agent", replace, status: "pending" };
         }
@@ -301,7 +300,6 @@ export class MemoryStore implements DocStore {
         }
         this.setState(thread, "replied");
         this.emit();
-        return downgraded;
     }
 
     /** `margin suggest --find`: an agent-initiated thread. */
@@ -373,37 +371,28 @@ export class MemoryStore implements DocStore {
         }
         for (const { thread, spec } of placed) {
             if (spec.applied !== undefined) {
-                const before = this.anchoredText(thread);
-                if (
-                    before !== null &&
-                    this.replaceAnchored(thread, spec.applied, "apply", "agent").ok
-                ) {
-                    const seq = this.edits[this.edits.length - 1]!.seq;
-                    thread.applied = {
-                        seq,
-                        start: thread.anchor.hint,
-                        before,
-                        after: spec.applied,
-                        reverted: false,
-                    };
-                }
+                this.applyAgentEdit(thread, spec.applied);
             }
         }
         this.agentSeenAt = new Date(this.clock.now() - 20_000).toISOString();
+        // The seeded watch printed every thread so far.
+        for (const thread of this.threads.values()) {
+            thread.notifiedAt = this.agentSeenAt;
+        }
         this.emit();
     }
 
-    private open(anchor: Anchor, by: Author, text?: string): Thread {
+    /** Without an anchor, a doc note. */
+    private open(anchor: Anchor | undefined, by: Author, text?: string): Thread {
         const id: ThreadId = `c${this.nextId++}`;
         const thread: Thread = {
             id,
             state: by === "user" && this.settings.hold ? "draft" : "open",
-            anchor,
+            ...(anchor ? { anchor } : {}),
             detached: false,
             createdBy: by,
             messages: [],
             claimed: false,
-            autoApply: false,
             lastActivity: this.isoNow(),
         };
         this.threads.set(id, thread);
@@ -411,6 +400,10 @@ export class MemoryStore implements DocStore {
             this.message(thread, by, text);
         }
         return thread;
+    }
+
+    private live(): Thread[] {
+        return [...this.threads.values()].filter((thread) => !this.deleted.has(thread.id));
     }
 
     private thread(id: ThreadId): Thread {
@@ -442,8 +435,21 @@ export class MemoryStore implements DocStore {
         }
     }
 
+    /** The agent's edit over the thread's quote, recorded on the thread when it lands. */
+    private applyAgentEdit(thread: Thread, replace: string): void {
+        const before = this.anchoredText(thread);
+        if (before === null || !this.replaceAnchored(thread, replace, "apply", "agent").ok) {
+            return;
+        }
+        const range = thread.anchor && resolveAnchor(this.source, thread.anchor);
+        if (range) {
+            const seq = this.edits[this.edits.length - 1]!.seq;
+            thread.applied = { seq, start: range.start, before, after: replace, reverted: false };
+        }
+    }
+
     private anchoredText(thread: Thread): string | null {
-        const range = resolveAnchor(this.source, thread.anchor);
+        const range = thread.anchor ? resolveAnchor(this.source, thread.anchor) : null;
         return range ? this.source.slice(range.start, range.end) : null;
     }
 
@@ -454,7 +460,7 @@ export class MemoryStore implements DocStore {
         cause: EditCause,
         by: Author,
     ): { ok: true } | { ok: false; reason: "conflict"; current: string } {
-        const range = resolveAnchor(this.source, thread.anchor);
+        const range = thread.anchor ? resolveAnchor(this.source, thread.anchor) : null;
         if (!range) {
             return { ok: false, reason: "conflict", current: "" };
         }
@@ -491,6 +497,9 @@ export class MemoryStore implements DocStore {
         this.source = source;
         this.doc = parseDoc(source);
         for (const thread of this.threads.values()) {
+            if (!thread.anchor) {
+                continue;
+            }
             if (thread === moved && edit.after.length > 0) {
                 thread.anchor = createAnchor(source, {
                     start: edit.start,
@@ -526,10 +535,10 @@ export class MemoryStore implements DocStore {
         return {
             path: this.path,
             doc: this.doc,
-            threads: [...this.threads.values()].map((thread) => ({
+            threads: this.live().map((thread) => ({
                 ...thread,
-                anchor: { ...thread.anchor },
-                detached: resolveAnchor(this.source, thread.anchor) === null,
+                ...(thread.anchor ? { anchor: { ...thread.anchor } } : {}),
+                detached: !!thread.anchor && resolveAnchor(this.source, thread.anchor) === null,
                 messages: [...thread.messages],
                 suggestion: thread.suggestion && { ...thread.suggestion },
                 applied: thread.applied && { ...thread.applied },

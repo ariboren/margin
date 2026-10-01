@@ -7,67 +7,81 @@
     --paper-sunk: #f2f2f3;
     --ink: #1d1e21;
     --ink-soft: #43464c;
-    --muted: #6b6f76;
+    --muted: #5c6067;
     --rule: #e4e5e7;
     --rule-strong: #cdd0d4;
     --accent: #3a5a8c;
     --accent-soft: rgb(58 90 140 / 0.09);
     --agent: var(--accent);
     --agent-soft: var(--accent-soft);
+    --edit: var(--ink);
     --hl: rgb(58 90 140 / 0.1);
     --hl-line: rgb(58 90 140 / 0.45);
-    --hl-active: rgb(58 90 140 / 0.2);
-    --hl-faint: rgb(107 111 118 / 0.45);
+    --hl-active: rgb(58 90 140 / 0.24);
+    --hl-faint: rgb(92 96 103 / 0.45);
     --del: #a33a2e;
     --del-bg: rgb(190 70 55 / 0.09);
     --ins: #2b6b3f;
     --ins-bg: rgb(55 140 85 / 0.11);
     --warn: #7d5a00;
     --warn-bg: rgb(225 170 40 / 0.14);
+    --ok: #2b6b3f;
+    --ok-bg: rgb(55 140 85 / 0.12);
+    --err: #a33a2e;
+    --err-bg: rgb(190 70 55 / 0.1);
     --shadow: 0 1px 2px rgb(20 22 26 / 0.05), 0 4px 16px rgb(20 22 26 / 0.05);
     --shadow-active: 0 2px 4px rgb(20 22 26 / 0.07), 0 10px 30px rgb(20 22 26 / 0.11);
-    --doc-size: 18px;
-    --doc-leading: 1.6;
+    --doc-size: 17px;
+    --doc-leading: 1.62;
     --ui-size: 13px;
     --ui-small: 12px;
+    --bar-height: 51px;
 }
 
-/* Text size scales the reading column only; the bar, outline and margin cards stay put. */
-:root[data-density="sm"] .reading {
-    --doc-size: 16.5px;
-    --doc-leading: 1.55;
-}
-
-:root[data-density="lg"] .reading {
-    --doc-size: 19.5px;
+/* Text size scales the reading column only; the bar, outline and margin cards stay put. The
+   leading opens a little as the type gets smaller, since medium and small page margins let the
+   measure grow with it. */
+:root[data-density="sm"] {
+    --doc-size: 15px;
     --doc-leading: 1.65;
 }
 
+:root[data-density="lg"] {
+    --doc-size: 19px;
+    --doc-leading: 1.6;
+}
+
+/* Both dark blocks set every token the light block sets, so light values never reach dark. */
 @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
         color-scheme: dark;
         --paper: #1b1c1e;
-        --paper-raised: #232427;
+        --paper-raised: #26272b;
         --paper-sunk: #1f2022;
         --ink: #d4d6d9;
-        --ink-soft: #b0b3b8;
-        --muted: #8b8f96;
+        --ink-soft: #bcbfc4;
+        --muted: #9ca0a7;
         --rule: #303236;
-        --rule-strong: #3e4146;
+        --rule-strong: #4b4f55;
         --accent: #9db2d6;
         --accent-soft: rgb(157 178 214 / 0.1);
         --agent: var(--accent);
         --agent-soft: var(--accent-soft);
+        --edit: var(--ink);
         --hl: rgb(157 178 214 / 0.1);
         --hl-line: rgb(157 178 214 / 0.42);
-        --hl-active: rgb(157 178 214 / 0.2);
-        --hl-faint: rgb(139 143 150 / 0.45);
-        --del: #e39a8f;
-        --del-bg: rgb(227 120 105 / 0.11);
+        --hl-active: rgb(157 178 214 / 0.26);
+        --hl-faint: rgb(156 160 167 / 0.45);
+        --del: #e8a094;
+        --del-bg: rgb(217 122 134 / 0.1);
         --ins: #93c9a2;
         --ins-bg: rgb(120 190 140 / 0.11);
-        --warn: #d9b560;
-        --warn-bg: rgb(217 181 96 / 0.11);
+        --warn: #e0c274;
+        --warn-bg: rgb(224 194 116 / 0.07);
+        --ok: #93c9a2;
+        --ok-bg: rgb(120 190 140 / 0.12);
+        --err: #e8a094;
+        --err-bg: rgb(217 122 134 / 0.12);
         --shadow: 0 1px 2px rgb(0 0 0 / 0.25), 0 4px 16px rgb(0 0 0 / 0.2);
         --shadow-active: 0 2px 4px rgb(0 0 0 / 0.3), 0 10px 30px rgb(0 0 0 / 0.35);
     }
@@ -76,27 +90,32 @@
 :root[data-theme="dark"] {
     color-scheme: dark;
     --paper: #1b1c1e;
-    --paper-raised: #232427;
+    --paper-raised: #26272b;
     --paper-sunk: #1f2022;
     --ink: #d4d6d9;
-    --ink-soft: #b0b3b8;
-    --muted: #8b8f96;
+    --ink-soft: #bcbfc4;
+    --muted: #9ca0a7;
     --rule: #303236;
-    --rule-strong: #3e4146;
+    --rule-strong: #4b4f55;
     --accent: #9db2d6;
     --accent-soft: rgb(157 178 214 / 0.1);
     --agent: var(--accent);
     --agent-soft: var(--accent-soft);
+    --edit: var(--ink);
     --hl: rgb(157 178 214 / 0.1);
     --hl-line: rgb(157 178 214 / 0.42);
-    --hl-active: rgb(157 178 214 / 0.2);
-    --hl-faint: rgb(139 143 150 / 0.45);
-    --del: #e39a8f;
-    --del-bg: rgb(227 120 105 / 0.11);
+    --hl-active: rgb(157 178 214 / 0.26);
+    --hl-faint: rgb(156 160 167 / 0.45);
+    --del: #e8a094;
+    --del-bg: rgb(217 122 134 / 0.1);
     --ins: #93c9a2;
     --ins-bg: rgb(120 190 140 / 0.11);
-    --warn: #d9b560;
-    --warn-bg: rgb(217 181 96 / 0.11);
+    --warn: #e0c274;
+    --warn-bg: rgb(224 194 116 / 0.07);
+    --ok: #93c9a2;
+    --ok-bg: rgb(120 190 140 / 0.12);
+    --err: #e8a094;
+    --err-bg: rgb(217 122 134 / 0.12);
     --shadow: 0 1px 2px rgb(0 0 0 / 0.25), 0 4px 16px rgb(0 0 0 / 0.2);
     --shadow-active: 0 2px 4px rgb(0 0 0 / 0.3), 0 10px 30px rgb(0 0 0 / 0.35);
 }
@@ -142,6 +161,16 @@
 }
 
 @layer components {
+    /* Text for assistive technology only: kept in the tree and readable, drawn nowhere. */
+    .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+    }
+
     /* Frame */
 
     .topbar {
@@ -153,15 +182,19 @@
         justify-content: space-between;
         gap: 16px;
         padding: 10px 24px;
+        min-height: var(--bar-height);
         background: color-mix(in srgb, var(--paper) 88%, transparent);
         backdrop-filter: blur(10px);
         border-bottom: 1px solid var(--rule);
         font-size: var(--ui-size);
     }
 
+    /* The name's hover padding sits inside the bar's gap, so its text keeps the same visible
+       spacing from the outline button as the bar's other controls keep from each other. */
     .doc-name {
         position: relative;
         min-width: 0;
+        margin-inline-start: -8px;
     }
 
     .doc-name-button {
@@ -234,6 +267,132 @@
         color: var(--muted);
     }
 
+    /* The agent chip beside the filename: the agent's mark and name, "+N" for more. Tinted by
+       state: green while connected, amber when stalled or nobody is here, red when the daemon is
+       lost. */
+    .agent-chip {
+        position: relative;
+        display: inline-flex;
+        min-width: 0;
+        color: var(--ink-soft);
+        font-size: var(--ui-small);
+        font-weight: 500;
+        line-height: 1.4;
+    }
+
+    .agent-chip-text,
+    .agent-chip-button {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 100%;
+        padding: 3px 9px 3px 7px;
+        border: 1px solid var(--rule);
+        border-radius: 999px;
+        background: var(--paper-raised);
+        color: inherit;
+        font: inherit;
+        cursor: default;
+    }
+
+    .agent-chip-button {
+        cursor: pointer;
+    }
+
+    .agent-chip-text:focus-visible,
+    .agent-chip-button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+    }
+
+    .agent-chip .agent-mark {
+        flex: none;
+    }
+
+    .agent-chip-name {
+        max-width: 14ch;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .agent-chip-extra {
+        flex: none;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* Each state tints the pill over the raised paper, so the text's contrast is measured against
+       a solid. */
+    .agent-chip-connected .agent-chip-text {
+        color: var(--ok);
+        border-color: color-mix(in srgb, var(--ok) 30%, var(--rule));
+        background: linear-gradient(var(--ok-bg), var(--ok-bg)) var(--paper-raised);
+    }
+
+    .agent-chip-stalled .agent-chip-button,
+    .agent-chip-disconnected .agent-chip-button,
+    .agent-chip-none .agent-chip-button {
+        color: var(--warn);
+        border-color: var(--warn);
+        background: linear-gradient(var(--warn-bg), var(--warn-bg)) var(--paper-raised);
+    }
+
+    .agent-chip-offline .agent-chip-text {
+        color: var(--err);
+        border-color: var(--err);
+        background: linear-gradient(var(--err-bg), var(--err-bg)) var(--paper-raised);
+    }
+
+    /* The copy remedy deepens its tint on hover. */
+    .agent-chip-disconnected .agent-chip-button:hover,
+    .agent-chip-none .agent-chip-button:hover {
+        background:
+            linear-gradient(var(--warn-bg), var(--warn-bg)),
+            linear-gradient(var(--warn-bg), var(--warn-bg)) var(--paper-raised);
+    }
+
+    .agent-chip .chip-check {
+        color: var(--ok);
+    }
+
+    .agent-chip .chip-popover {
+        left: 0;
+        translate: none;
+    }
+
+    /* Below 560 px the bar keeps the mark and drops the name; the tooltip still names everyone. */
+    @media (max-width: 560px) {
+        .agent-chip-name,
+        .agent-chip-extra {
+            display: none;
+        }
+
+        .agent-chip-text,
+        .agent-chip-button {
+            padding: 3px 7px;
+        }
+    }
+
+    /* A tooltip listing agents: one per line, each with its mark. */
+    .tip-lines {
+        display: grid;
+        gap: 3px;
+    }
+
+    .tip-lines > span,
+    .tip-agent {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .tip-lines .agent-mark,
+    .tip-agent .agent-mark {
+        flex: none;
+        color: var(--agent);
+    }
+
     .topbar-start,
     .topbar-end {
         display: flex;
@@ -242,42 +401,18 @@
         min-width: 0;
     }
 
-    .agent-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 4px 10px;
-        border-radius: 999px;
-        border: 1px solid var(--rule);
-        color: var(--muted);
-        white-space: nowrap;
-    }
-
-    .agent-dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
+    .topbar-divider {
+        width: 1px;
+        height: 18px;
+        flex: none;
         background: var(--rule-strong);
     }
 
-    .agent-watching {
-        color: var(--agent);
-        border-color: color-mix(in srgb, var(--agent) 30%, transparent);
-    }
-
-    .agent-watching .agent-dot {
-        background: var(--agent);
-    }
-
-    .agent-working {
-        color: var(--agent);
-        background: var(--agent-soft);
-        border-color: transparent;
-    }
-
-    .agent-working .agent-dot {
-        background: var(--agent);
-        animation: pulse 1.2s ease-in-out infinite;
+    /* View controls right of the divider sit closer together than the bar's own gap. */
+    .topbar-view {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
     }
 
     @keyframes pulse {
@@ -305,7 +440,7 @@
         right: 0;
         top: calc(100% + 8px);
         z-index: 30;
-        width: 300px;
+        width: 328px;
         display: grid;
         gap: 4px;
         padding: 8px;
@@ -342,19 +477,39 @@
     }
 
     .segment {
+        display: inline-grid;
+        place-items: center;
         border: 0;
         border-radius: 6px;
-        padding: 3px 10px;
+        padding: 3px 9px;
         background: transparent;
-        color: var(--ink-soft);
-        font: inherit;
+        color: var(--muted);
         font-size: 12px;
+        white-space: nowrap;
+    }
+
+    .segment:hover {
+        color: var(--ink);
+    }
+
+    .segment svg {
+        width: 16px;
+        height: 16px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.5;
+        stroke-linecap: round;
+        stroke-linejoin: round;
     }
 
     .segment-on {
         background: var(--paper-raised);
-        color: var(--ink);
+        color: var(--accent);
         box-shadow: 0 0 0 1px var(--rule-strong);
+    }
+
+    .segment-on:hover {
+        color: var(--accent);
     }
 
     .setting {
@@ -402,7 +557,8 @@
         color: var(--warn);
     }
 
-    /* Rendered by the daemon host outside the app: connection and failed-request notices. */
+    /* Rendered by the daemon host for a page that never connected; once the app is up, the chip
+       below the bar carries connection state. */
     .connection-banner {
         position: fixed;
         bottom: 16px;
@@ -421,35 +577,92 @@
         font-size: 13px;
     }
 
+    /* Page margins cap the reading column; small fills whatever the outline and the rail leave.
+       Large sizes the column in ems so the measure stays near 80 characters at every text size.
+       Below the three-column width they set the side gutter instead. Large stops growing where the
+       column would drop under about 45 characters (the serif runs about 0.45em a character). */
     .page {
+        --column: calc(35.8 * var(--doc-size));
+        --measure-min: calc(20.4 * var(--doc-size));
+        --gutter: clamp(32px, (100% - var(--measure-min)) / 2, 56px);
+        --page-top: 40px;
         display: grid;
         grid-template-columns: minmax(0, 1fr);
         justify-content: center;
         gap: 48px;
-        padding: 40px 16px 30vh;
+        padding: var(--page-top) var(--gutter) 30vh;
         max-width: 1440px;
         margin-inline: auto;
     }
 
+    :root[data-margins="md"] .page {
+        --column: 860px;
+        --gutter: 32px;
+        max-width: 1640px;
+    }
+
+    :root[data-margins="sm"] .page {
+        --column: 1fr;
+        --gutter: 16px;
+        max-width: none;
+    }
+
+    @media (max-width: 640px) {
+        .page {
+            --gutter: clamp(16px, (100% - var(--measure-min)) / 2, 24px);
+        }
+
+        :root[data-margins="md"] .page {
+            --gutter: 16px;
+        }
+
+        :root[data-margins="sm"] .page {
+            --gutter: 12px;
+        }
+    }
+
     @media (min-width: 1024px) {
         .page {
-            grid-template-columns: minmax(0, 680px) 320px;
-            padding-inline: 32px;
+            grid-template-columns: minmax(0, var(--column)) 320px;
         }
 
         .page-no-margin {
-            grid-template-columns: minmax(0, 680px);
+            grid-template-columns: minmax(0, var(--column));
         }
     }
 
     @media (min-width: 1280px) {
+        /* The frame starts at the bar's menu button: the outline sits flush under it and the
+           text keeps one left edge at every size, with the slack on the right. Without the
+           outline there is nothing to line up with, so the column is centred. */
         .page {
-            grid-template-columns: 220px minmax(0, 680px) 330px;
+            grid-template-columns: 220px minmax(0, var(--column)) 330px;
+            justify-content: start;
+            padding-inline: 24px;
         }
 
-        /* Hiding the margin recentres the reading column; an empty track balances the outline. */
+        /* With the margin hidden the outline stays put and the column centres in the space right of it. */
         .page-no-margin {
-            grid-template-columns: 220px minmax(0, 680px) 220px;
+            grid-template-columns: 220px minmax(0, 1fr);
+        }
+
+        :root:not([data-margins="sm"]) .page-no-margin .reading {
+            width: 100%;
+            max-width: var(--column);
+            justify-self: center;
+        }
+
+        .page-no-outline {
+            grid-template-columns: minmax(0, var(--column)) 330px;
+            justify-content: center;
+        }
+
+        .page-no-outline.page-no-margin {
+            grid-template-columns: minmax(0, var(--column));
+        }
+
+        :root[data-margins="sm"] .page-no-outline.page-no-margin {
+            grid-template-columns: minmax(0, 1fr);
         }
     }
 
@@ -457,16 +670,16 @@
         min-width: 0;
     }
 
+    /* The outline is a panel flush under the bar for the whole viewport height; the negative
+       margin takes back the page's top padding so the panel starts where the bar ends. */
     .sidebar {
         position: sticky;
-        top: 72px;
+        top: var(--bar-height);
         align-self: start;
-        max-height: calc(100vh - 96px);
-        overflow-y: auto;
-        display: grid;
-        gap: 16px;
-        padding-right: 8px;
-        scrollbar-width: thin;
+        height: calc(100vh - var(--bar-height));
+        margin-top: calc(-1 * var(--page-top));
+        padding-top: 24px;
+        min-width: 0;
     }
 
     .margin {
@@ -480,9 +693,17 @@
         font-size: 13px;
     }
 
+    .toc-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 4px;
+    }
+
     .toc-title {
-        margin: 0 0 8px;
-        padding-left: 10px;
+        margin: 0;
+        padding-left: 8px;
         font-size: 11px;
         font-weight: 600;
         letter-spacing: 0.06em;
@@ -503,7 +724,7 @@
         align-items: baseline;
         justify-content: space-between;
         gap: 8px;
-        padding: 5px 10px;
+        padding: 5px 8px;
         border-radius: 6px;
         color: var(--ink-soft);
         text-decoration: none;
@@ -515,7 +736,8 @@
         color: var(--ink);
     }
 
-    .toc-current {
+    .toc-current,
+    .toc-current:hover {
         color: var(--accent);
         font-weight: 560;
         background: var(--accent-soft);
@@ -537,8 +759,65 @@
         color: var(--accent);
         font-size: 11px;
         font-weight: 600;
+        font-variant-numeric: tabular-nums;
         text-align: center;
         line-height: 18px;
+    }
+
+    /* In the panel the head stays put and the list scrolls under it. The fade at both ends
+       replaces a hard clip; the thin thumb shows only while the outline is hovered or focused,
+       and the gutter is reserved so the current item's pill is never covered. Both scrollbar
+       models are styled: Chromium before 121 only knows the -webkit- pseudo-elements. */
+    .sidebar .toc {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        height: 100%;
+    }
+
+    .sidebar .toc ol {
+        overflow-y: auto;
+        padding-top: 12px;
+        padding-bottom: 32px;
+        scrollbar-width: thin;
+        scrollbar-color: transparent transparent;
+        scrollbar-gutter: stable;
+        -webkit-mask-image: linear-gradient(
+            to bottom,
+            transparent,
+            #000 24px,
+            #000 calc(100% - 32px),
+            transparent
+        );
+        mask-image: linear-gradient(
+            to bottom,
+            transparent,
+            #000 24px,
+            #000 calc(100% - 32px),
+            transparent
+        );
+    }
+
+    .sidebar .toc:hover ol,
+    .sidebar .toc:focus-within ol {
+        scrollbar-color: var(--rule-strong) transparent;
+    }
+
+    .sidebar .toc ol::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    .sidebar .toc ol::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .sidebar .toc ol::-webkit-scrollbar-thumb {
+        background: transparent;
+        border-radius: 3px;
+    }
+
+    .sidebar .toc:hover ol::-webkit-scrollbar-thumb,
+    .sidebar .toc:focus-within ol::-webkit-scrollbar-thumb {
+        background: var(--rule-strong);
     }
 
     /* Reading column */
@@ -551,6 +830,19 @@
         color: var(--ink);
         overflow-wrap: break-word;
         cursor: text;
+    }
+
+    /* The serif at 400 thins optically on dark; weight, not a dimmer ink, keeps it above Lc 75. */
+    @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) .doc,
+        :root:not([data-theme="light"]) .doc th .unit-textarea {
+            font-weight: 430;
+        }
+    }
+
+    :root[data-theme="dark"] .doc,
+    :root[data-theme="dark"] .doc th .unit-textarea {
+        font-weight: 430;
     }
 
     .doc > * {
@@ -602,6 +894,7 @@
     .doc p {
         text-wrap: pretty;
         hyphens: auto;
+        hyphenate-limit-chars: 7 4 3;
     }
 
     .doc a {
@@ -748,16 +1041,27 @@
         text-align: left;
         border-bottom: 1px solid var(--rule);
         min-width: 7em;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .doc th:first-child,
+    .doc td:first-child {
+        min-width: 0;
     }
 
     .doc th {
         font-family: var(--font-sans);
         font-size: var(--ui-small);
         font-weight: 600;
-        color: var(--muted);
+        letter-spacing: 0.02em;
+        color: var(--ink-soft);
         background: var(--paper-sunk);
         position: sticky;
         top: 0;
+    }
+
+    .doc tbody tr:nth-child(even) td {
+        background: color-mix(in srgb, var(--ink) 3%, transparent);
     }
 
     .doc tbody tr:last-child td {
@@ -768,19 +1072,69 @@
         font-size: 0.82em;
     }
 
+    /* The editability cue stays off the text: a rule in the gutter instead of a fill under the
+       unit. Two shadows because one cannot leave a gap: the first masks the near 8px. What the
+       hover paints comes from per-unit variables, so a unit kind adjusts them without repeating
+       the long selector. */
+    .doc [data-unit] {
+        --unit-hover-fill: transparent;
+        --unit-hover-radius: 0;
+        --unit-hover-shadow: -8px 0 0 0 var(--paper), -10px 0 0 0 var(--rule-strong);
+        transition: box-shadow 120ms;
+    }
+
     .doc
         [data-unit]:not([data-kind="list"]):not([data-kind="table"]):not(
             [data-kind="blockquote"]
         ):not(.unit-editor):hover {
-        background: var(--paper-sunk);
-        box-shadow: 0 0 0 6px var(--paper-sunk);
-        border-radius: 2px;
+        background: var(--unit-hover-fill);
+        border-radius: var(--unit-hover-radius);
+        box-shadow: var(--unit-hover-shadow);
     }
 
-    .doc td[data-unit]:hover,
-    .doc th[data-unit]:hover {
-        box-shadow: none;
-        background: var(--paper-sunk);
+    /* Nested units all match :hover; only the innermost draws. */
+    .doc [data-unit]:has([data-unit]:hover) {
+        --unit-hover-shadow: none;
+    }
+
+    .doc [data-kind="code"],
+    .doc [data-kind="html"],
+    .doc [data-kind="yaml"],
+    .doc [data-kind="toml"] {
+        --unit-hover-fill: var(--paper-sunk);
+        --unit-hover-radius: 8px;
+    }
+
+    .doc [data-kind="tableCell"] {
+        --unit-hover-fill: var(--paper-sunk);
+        --unit-hover-shadow: none;
+    }
+
+    .doc blockquote [data-unit] {
+        --unit-hover-shadow: -8px 0 0 0 var(--paper-sunk), -10px 0 0 0 var(--rule-strong);
+    }
+
+    /* A list item's gutter holds its marker, so the mask would hide it: the innermost hovered
+       item draws the rule left of its marker, and the units inside it draw nothing. Inside a
+       quote the item is named again, to tie the quote rule's specificity and follow it. */
+    .doc [data-kind="listItem"],
+    .doc blockquote [data-kind="listItem"],
+    .doc [data-kind="listItem"] [data-unit] {
+        --unit-hover-shadow: none;
+    }
+
+    .doc [data-kind="listItem"] {
+        position: relative;
+    }
+
+    .doc [data-kind="listItem"]:hover:not(:has([data-kind="listItem"]:hover))::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: calc(-1.4em - 10px);
+        width: 2px;
+        background: var(--rule-strong);
     }
 
     .source-hatch {
@@ -820,10 +1174,6 @@
         transition: background 120ms;
     }
 
-    .hl-active {
-        background: var(--hl-active);
-    }
-
     .hl-draft {
         background: transparent;
         border-bottom-style: dashed;
@@ -836,7 +1186,27 @@
 
     .hl-resolved {
         background: transparent;
-        border-bottom: 1px dotted var(--hl-faint);
+        border-bottom-width: 1px;
+        border-bottom-style: dotted;
+        border-bottom-color: var(--hl-faint);
+    }
+
+    /* Active thread: the passage gets a fill that stays legible and a 2px rule; every other
+       highlight halves its fill while one is active, so marks stay findable without competing.
+       The dimming goes through the fill tokens, so marks with no fill at rest (drafts, resolved)
+       stay bare and applied marks keep their tint. Suggestion diffs keep their resting fills
+       (boosted ones pushed the red and green text under Lc 60) and take the same rule. After
+       the kind rules at equal specificity, so an active mark looks active whatever its kind: the
+       kind keeps its line style (dashed, dotted) under the active fill and colour. */
+    .hl-active {
+        background: var(--hl-active);
+        border-bottom-width: 2px;
+        border-bottom-color: var(--accent);
+    }
+
+    .doc:has(.hl-active, .sg-active) .hl:not(.hl-active):not(.hl-pending) {
+        --hl: color-mix(in srgb, var(--accent) 5%, transparent);
+        --agent-soft: color-mix(in srgb, var(--accent-soft) 50%, transparent);
     }
 
     .hl-pending {
@@ -849,14 +1219,9 @@
         border-radius: 2px;
     }
 
-    .sg-active .sg-del,
-    .sg-del.sg-active {
-        background: color-mix(in srgb, var(--del) 22%, transparent);
-    }
-
-    .sg-active .sg-ins,
+    .sg-active,
     .sg-ins.sg-active {
-        background: color-mix(in srgb, var(--ins) 24%, transparent);
+        border-bottom: 2px solid var(--accent);
     }
 
     .sg-del {
@@ -877,17 +1242,24 @@
 
     /* Raw editing */
 
-    /* Editors keep the unit's box: negative margins cancel the padding, the hint sits in the gap above. */
+    /* An editor keeps the unit's box (its margins are set inline from the rendered block); the ring
+       is painted behind it, reaching 8px past the text. */
     .unit-editor {
         position: relative;
+        isolation: isolate;
         display: grid;
         gap: 6px;
-        margin: -8px -12px;
-        padding: 8px 12px;
+    }
+
+    .unit-editor::before {
+        content: "";
+        position: absolute;
+        inset: -8px -12px;
+        z-index: -1;
         border-radius: 8px;
         background: var(--paper-raised);
         box-shadow:
-            0 0 0 1px var(--rule-strong),
+            0 0 0 2px var(--edit),
             var(--shadow);
     }
 
@@ -900,17 +1272,21 @@
         width: min(720px, calc(100vw - 32px));
         max-height: 60vh;
         margin: 0;
+        padding: 8px 12px;
         overflow: auto;
         transform: translateX(-50%);
+        border-radius: 8px;
+        background: var(--paper-raised);
         font-family: var(--font-sans);
         font-size: 14px;
         box-shadow:
-            0 0 0 1px var(--rule-strong),
+            0 0 0 2px var(--edit),
             var(--shadow-active);
     }
 
-    .doc > .unit-editor {
-        margin-bottom: calc(1.05em - 8px);
+    .unit-editor-stranded::before,
+    .unit-editor-cell::before {
+        content: none;
     }
 
     .doc td.cell-editing {
@@ -932,9 +1308,19 @@
         margin: 0;
         padding: 8px 12px;
         border-radius: 0;
+        background: var(--paper-raised);
         box-shadow:
-            inset 0 0 0 2px var(--accent),
+            inset 0 0 0 2px var(--edit),
             var(--shadow);
+    }
+
+    /* A header cell is set in the small sans; its source is prose all the same, so it edits in the
+       body cells' serif. */
+    .doc th .unit-textarea {
+        font-family: var(--font-serif);
+        font-size: calc(var(--doc-size) * 0.82);
+        font-weight: 400;
+        letter-spacing: normal;
     }
 
     .unit-textarea {
@@ -951,6 +1337,11 @@
         display: block;
     }
 
+    /* The editor's ring is the focus ring; the textarea inside stays bare. */
+    .unit-textarea:focus-visible {
+        outline: none;
+    }
+
     .unit-textarea.mono {
         font-family: var(--font-mono);
         font-size: calc(var(--doc-size) * 0.74);
@@ -959,15 +1350,68 @@
         overflow-x: auto;
     }
 
+    /* The keys hint for whichever editor is open: a chip docked at the bottom, out of the doc so it
+       covers no text, on the doc notes button's layer. A click on it falls through and blur-saves.
+       Hidden, it fades out first and only then drops back, so a quick block switch doesn't slide. */
     .unit-editor-hint {
-        position: absolute;
-        bottom: calc(100% + 3px);
-        right: 4px;
+        position: fixed;
+        bottom: 16px;
+        left: 50%;
+        z-index: 25;
+        display: flex;
+        align-items: center;
+        height: 28px;
         margin: 0;
-        font-family: var(--font-sans);
-        font-size: 11.5px;
+        padding: 0 12px;
+        border-radius: 999px;
+        border: 1px solid var(--rule-strong);
+        background: var(--paper-raised);
+        box-shadow: var(--shadow);
         color: var(--muted);
+        font-family: var(--font-sans);
+        font-size: var(--ui-small);
+        white-space: nowrap;
         pointer-events: none;
+        opacity: 0;
+        visibility: hidden;
+        translate: -50% 4px;
+        transition:
+            opacity 80ms ease,
+            translate 0s linear 80ms,
+            visibility 0s linear 80ms;
+    }
+
+    .unit-editor-hint[data-open] {
+        opacity: 1;
+        visibility: visible;
+        translate: -50% 0;
+        transition:
+            opacity 120ms ease-out,
+            translate 120ms ease-out;
+    }
+
+    .unit-editor-hint kbd {
+        font-size: 11px;
+        color: var(--ink-soft);
+    }
+
+    .unit-editor-hint-short {
+        display: none;
+    }
+
+    /* Above the doc notes button, which shares the bottom edge once the page is this narrow. */
+    @media (max-width: 640px) {
+        .unit-editor-hint {
+            bottom: 56px;
+        }
+
+        .unit-editor-hint-long {
+            display: none;
+        }
+
+        .unit-editor-hint-short {
+            display: inline;
+        }
     }
 
     .conflict-bar {
@@ -987,6 +1431,26 @@
     .conflict-actions {
         display: inline-flex;
         gap: 6px;
+    }
+
+    /* A conflict while editing takes the hint chip's place at the bottom rather than a row in the
+       editor, so the block's height never changes under the reviewer. */
+    .conflict-dock {
+        position: fixed;
+        bottom: 16px;
+        left: 50%;
+        z-index: 25;
+        width: min(720px, calc(100vw - 32px));
+        translate: -50% 0;
+        background: linear-gradient(var(--warn-bg), var(--warn-bg)) var(--paper-raised);
+        box-shadow: var(--shadow-active);
+    }
+
+    /* Above the doc notes button, like the hint; after the base rule, which it ties on specificity. */
+    @media (max-width: 640px) {
+        .conflict-dock {
+            bottom: 56px;
+        }
     }
 
     /* Margin */
@@ -1009,8 +1473,39 @@
         transition: top 180ms ease;
     }
 
+    /* Set while every card is placed at once, as one arrives or leaves. */
+    .rail-still .rail-slot {
+        transition: none;
+    }
+
     .rail-slot-active {
         z-index: 5;
+    }
+
+    .rail-slot-leaving {
+        z-index: 0;
+        pointer-events: none;
+        animation: rail-fade 200ms ease forwards;
+    }
+
+    @keyframes rail-fade {
+        to {
+            opacity: 0;
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .rail-slot {
+            transition: none;
+        }
+
+        .rail-slot-leaving {
+            animation-duration: 1ms;
+        }
+
+        .unit-editor-hint {
+            translate: -50% 0;
+        }
     }
 
     .rail-drawer {
@@ -1032,10 +1527,17 @@
             transform 150ms;
     }
 
+    /* The active card's slide, not its shadow, is the motion. */
+    @media (prefers-reduced-motion: reduce) {
+        .card {
+            transition: box-shadow 150ms;
+        }
+    }
+
     .card-active {
         cursor: default;
         box-shadow: var(--shadow-active);
-        border-color: var(--rule-strong);
+        border-color: color-mix(in srgb, var(--accent) 45%, var(--rule-strong));
         transform: translateX(-8px);
     }
 
@@ -1049,6 +1551,24 @@
         overflow-wrap: anywhere;
         max-height: 12em;
         overflow: auto;
+    }
+
+    /* The word diff on an "Edited by you" card, in the mono the agent reads it in; the pieces
+       reuse the suggestion diff colours. */
+    .edit-diff {
+        display: grid;
+        gap: 4px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        line-height: 1.5;
+        color: var(--ink-soft);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+    }
+
+    .edit-hunk {
+        display: block;
+        margin: 0;
     }
 
     .card-notice {
@@ -1069,6 +1589,11 @@
         cursor: default;
     }
 
+    /* Every collapsed card opens from a click anywhere on it, padding included. */
+    .card-collapsed {
+        cursor: pointer;
+    }
+
     .card-head {
         display: flex;
         align-items: center;
@@ -1079,6 +1604,7 @@
     .card-meta {
         color: var(--muted);
         font-size: 12px;
+        font-variant-numeric: tabular-nums;
         white-space: nowrap;
     }
 
@@ -1105,6 +1631,105 @@
         -webkit-box-orient: vertical;
     }
 
+    /* Collapsed cards. A collapsed card keeps its header row (pill left, time right) and
+       shows one line of summary under it; expanding reveals the body below without moving the
+       header. The header is a button in both states so the focus that expanded the card stays
+       put. No height transition: the rail measures cards as soon as they render. */
+    .card-toggle {
+        display: grid;
+        gap: 6px;
+        width: 100%;
+        min-width: 0;
+        padding: 0;
+        border: 0;
+        background: none;
+        color: inherit;
+        font: inherit;
+        text-align: start;
+        cursor: inherit;
+    }
+
+    .card-head-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        min-width: 0;
+    }
+
+    .card-toggle .pill {
+        flex: none;
+    }
+
+    .card-summary {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        min-width: 0;
+        font-size: var(--ui-size);
+        color: var(--ink-soft);
+    }
+
+    /* Speaker label, then the preview, on one baseline; only the preview is clipped. */
+    .card-summary-text {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        flex: 1;
+        min-width: 0;
+    }
+
+    .card-preview {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 400;
+    }
+
+    .card-summary-end {
+        flex: none;
+        font-size: 12px;
+        color: var(--muted);
+    }
+
+    /* The first hunk, and the kept-text quote, are the same element open or closed; closed, they
+       clamp to one line, so opening moves nothing above the body it reveals. */
+    .edit-row {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        min-width: 0;
+    }
+
+    .edit-row .edit-hunk {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .card-collapsed .edit-row .edit-hunk,
+    .card-collapsed .replaced-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .card-collapsed .replaced-text {
+        max-height: none;
+    }
+
+    .card-speaker {
+        flex: none;
+        font-weight: 600;
+    }
+
+    .card-collapsed .dots {
+        display: inline-flex;
+        vertical-align: middle;
+        color: var(--agent);
+    }
+
     .pill {
         display: inline-flex;
         align-items: center;
@@ -1128,13 +1753,42 @@
         color: var(--agent);
     }
 
+    .pill-notified {
+        background: transparent;
+        color: var(--agent);
+        box-shadow: inset 0 0 0 1px var(--agent);
+    }
+
+    /* Open and stalled keep their fills; the agent's news and the finished threads are text with
+       a dot, so the rail's loudest pills are the ones that need the reviewer. */
+    .pill-replied,
+    .pill-resolved,
+    .pill-editing {
+        background: transparent;
+        padding-left: 0;
+    }
+
+    .pill-replied::before,
+    .pill-resolved::before,
+    .pill-editing::before {
+        content: "";
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: currentColor;
+    }
+
     .pill-replied {
-        background: var(--agent-soft);
         color: var(--agent);
     }
 
     .pill-resolved {
         color: var(--muted);
+    }
+
+    /* The editor hint chip's label: the replied pill's look, in the edit colour. */
+    .pill-editing {
+        color: var(--edit);
     }
 
     .pill-draft {
@@ -1188,9 +1842,76 @@
         color: var(--agent);
     }
 
-    .messages-more {
-        font-size: 12px;
+    .message-body {
+        display: grid;
+        gap: 6px;
+        min-width: 0;
+        color: var(--ink);
+        font-variant-numeric: tabular-nums;
+        overflow-wrap: anywhere;
+    }
+
+    .message-body ul,
+    .message-body ol {
+        margin: 0;
+        padding-left: 1.3em;
+        display: grid;
+        gap: 2px;
+    }
+
+    .message-body ul {
+        list-style: disc;
+    }
+
+    .message-body ol {
+        list-style: decimal;
+    }
+
+    .message-body li::marker {
         color: var(--muted);
+    }
+
+    /* List items keep display: list-item for their markers, so no gap here. */
+    .message-body li > * + * {
+        margin-top: 2px;
+    }
+
+    .message-body a {
+        color: var(--accent);
+        text-decoration: underline;
+        text-decoration-thickness: 1px;
+        text-underline-offset: 2px;
+    }
+
+    .message-body strong {
+        font-weight: 640;
+    }
+
+    .message-body pre {
+        margin: 0;
+        padding: 8px 10px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre;
+        overflow-x: auto;
+        border-radius: 6px;
+        background: var(--paper-sunk);
+        border: 1px solid var(--rule);
+    }
+
+    .message-body blockquote {
+        margin: 0;
+        padding-left: 10px;
+        display: grid;
+        gap: 6px;
+        border-left: 2px solid var(--rule-strong);
+        color: var(--ink-soft);
+    }
+
+    /* Markdown a message may not render (tables, raw HTML, images), shown as the text it was. */
+    .message-body .message-raw {
+        white-space: pre-wrap;
     }
 
     .working {
@@ -1225,6 +1946,13 @@
 
     .dots span:nth-child(3) {
         animation-delay: 0.3s;
+    }
+
+    /* After the base rule, which it ties on specificity. */
+    @media (prefers-reduced-motion: reduce) {
+        .dots span {
+            animation: none;
+        }
     }
 
     @keyframes blink {
@@ -1301,7 +2029,8 @@
 
     .reply-input:focus {
         border-color: var(--accent);
-        box-shadow: 0 0 0 3px var(--accent-soft);
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
     }
 
     .reply-input.mono {
@@ -1336,6 +2065,11 @@
     }
 
     /* Controls */
+
+    :is(button, a, input, select, textarea, summary):focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+    }
 
     .button {
         display: inline-flex;
@@ -1381,6 +2115,52 @@
         color: var(--paper);
     }
 
+    .card-confirm {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        font-size: 12.5px;
+        color: var(--ink);
+    }
+
+    .button-danger {
+        background: var(--del);
+        border-color: var(--del);
+        color: var(--paper);
+    }
+
+    /* "Thread deleted · Undo". Bottom left, clear of the centred connection banner. */
+    .toast {
+        position: fixed;
+        bottom: 16px;
+        left: 16px;
+        z-index: 60;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        max-width: calc(100vw - 32px);
+        padding: 6px 6px 6px 14px;
+        border: 1px solid var(--rule-strong);
+        border-radius: 8px;
+        background: var(--paper-raised);
+        box-shadow: var(--shadow-active);
+        color: var(--ink);
+        font-size: 13px;
+    }
+
+    .undo-buttons {
+        display: inline-flex;
+        gap: 2px;
+    }
+
+    /* Below 480 px the bar cannot hold undo and redo as well; ⌘Z and ⇧⌘Z still work. */
+    @media (max-width: 480px) {
+        .undo-buttons {
+            display: none;
+        }
+    }
+
     .icon-button {
         display: inline-grid;
         place-items: center;
@@ -1399,6 +2179,20 @@
     .icon-button:hover {
         background: var(--paper-sunk);
         color: var(--ink);
+    }
+
+    .icon-button-on:hover {
+        color: var(--accent);
+    }
+
+    .icon-button:disabled {
+        opacity: 0.4;
+        cursor: default;
+    }
+
+    .icon-button:disabled:hover {
+        background: transparent;
+        color: var(--ink-soft);
     }
 
     .icon-button svg {
@@ -1553,14 +2347,6 @@
             gap: 8px;
         }
 
-        .agent-label {
-            display: none;
-        }
-
-        .agent-chip {
-            padding: 6px;
-        }
-
         .doc {
             font-size: calc(var(--doc-size) - 1px);
         }
@@ -1569,6 +2355,12 @@
             max-width: 26vw;
         }
 
+        /* No deeper than the narrow gap, so the name's hover never overlaps the outline button. */
+        .doc-name {
+            margin-inline-start: -6px;
+        }
+
+        .topbar-start,
         .topbar-end {
             gap: 6px;
         }
@@ -1583,6 +2375,314 @@
 
         .doc h1 {
             font-size: 1.8em;
+        }
+    }
+
+    /* Doc notes: the floating bottom-right button and its panel. They sit outside the page and
+       the rail, over both; below the top-bar popovers (30) and the drawer scrim (50). The wrapper
+       is the fixed element, so the button's tooltip has a box to hang above. */
+    .doc-notes {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        z-index: 25;
+        display: flex;
+    }
+
+    .doc-notes-button {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        height: 32px;
+        padding: 0 12px;
+        border-radius: 999px;
+        border: 1px solid var(--rule-strong);
+        background: var(--paper-raised);
+        color: var(--ink-soft);
+        font-size: var(--ui-size);
+        box-shadow: var(--shadow);
+        cursor: pointer;
+    }
+
+    .doc-notes-button:hover,
+    .doc-notes-button[aria-expanded="true"] {
+        color: var(--ink);
+        border-color: color-mix(in srgb, var(--accent) 45%, var(--rule-strong));
+    }
+
+    .doc-notes-count {
+        padding: 0 6px;
+        border-radius: 999px;
+        background: var(--paper-sunk);
+        color: var(--muted);
+        font-size: var(--ui-small);
+        font-variant-numeric: tabular-nums;
+    }
+
+    .doc-notes-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--agent);
+    }
+
+    .doc-notes-busy .doc-notes-dot {
+        animation: pulse 1.2s ease-in-out infinite;
+    }
+
+    /* The panel sits outside the rail, so it sets the rail's type itself: same tokens, same cards. */
+    .doc-notes-panel {
+        position: fixed;
+        right: 16px;
+        bottom: 58px;
+        z-index: 25;
+        width: min(360px, calc(100vw - 32px));
+        max-height: 60vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        background: var(--paper-raised);
+        border: 1px solid var(--rule-strong);
+        border-radius: 12px;
+        box-shadow: var(--shadow-active);
+        font-family: var(--font-sans);
+        font-size: var(--ui-size);
+        line-height: 1.5;
+    }
+
+    .doc-notes-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 8px 8px 8px 14px;
+        border-bottom: 1px solid var(--rule);
+        font-size: 14px;
+        font-weight: 600;
+    }
+
+    .doc-notes-list {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        display: grid;
+        align-content: start;
+        gap: 10px;
+        padding: 12px;
+        background: var(--paper);
+    }
+
+    .doc-notes-list .card-active {
+        transform: none;
+    }
+
+    .doc-notes-empty {
+        margin: 0;
+        padding: 4px 2px;
+        color: var(--muted);
+        font-size: var(--ui-size);
+    }
+
+    .doc-notes-composer {
+        display: grid;
+        gap: 8px;
+        padding: 12px;
+        border-top: 1px solid var(--rule);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .doc-notes-busy .doc-notes-dot {
+            animation: none;
+        }
+    }
+
+    /* Tooltip: native titles do not show in Orca's browser, so the bar draws its own. Shown after
+       a short delay on hover and keyboard focus, hidden at once; never while the trigger's own
+       popover is open. Above the bar's popovers (30) so a neighbouring tip reads over one. */
+    .tip-host {
+        position: relative;
+        display: inline-flex;
+    }
+
+    .tip {
+        position: absolute;
+        top: calc(100% + 6px);
+        z-index: 35;
+        width: max-content;
+        max-width: min(300px, calc(100vw - 16px));
+        padding: 5px 8px;
+        border: 1px solid var(--rule);
+        border-radius: 7px;
+        background: var(--paper-raised);
+        box-shadow: var(--shadow-active);
+        color: var(--ink);
+        font-size: var(--ui-small);
+        font-weight: 450;
+        line-height: 1.4;
+        text-align: start;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        transform: translateX(var(--tip-shift, 0px));
+        pointer-events: none;
+        opacity: 0;
+        visibility: hidden;
+        transition:
+            opacity 100ms,
+            visibility 0s linear 100ms;
+    }
+
+    .tip-start {
+        left: 0;
+    }
+
+    .tip-center {
+        left: 50%;
+        translate: -50% 0;
+    }
+
+    .tip-end {
+        right: 0;
+    }
+
+    .tip-above {
+        top: auto;
+        bottom: calc(100% + 6px);
+    }
+
+    @media (hover: hover) {
+        .tip-host:hover > .tip {
+            opacity: 1;
+            visibility: visible;
+            transition-delay: 300ms;
+        }
+    }
+
+    .tip-host:has(:focus-visible) > .tip {
+        opacity: 1;
+        visibility: visible;
+        transition-delay: 300ms;
+    }
+
+    .tip-host:has([aria-expanded="true"]) > .tip {
+        display: none;
+    }
+
+    /* Request toast: a refused request at the top centre. It sits under the bar (z-index 10 to the
+       bar's 20) and slides out from behind its bottom edge until the store clears it. Reduced
+       motion fades instead. A tint over the raised paper keeps the text's contrast on a solid. */
+    .request-toast {
+        position: fixed;
+        top: var(--bar-height);
+        left: 50%;
+        z-index: 10;
+        max-width: calc(100vw - 32px);
+        padding: 4px 12px;
+        border: 1px solid color-mix(in srgb, var(--err) 30%, var(--rule));
+        border-radius: 999px;
+        background: linear-gradient(var(--err-bg), var(--err-bg)) var(--paper-raised);
+        box-shadow: var(--shadow);
+        color: var(--err);
+        font-size: var(--ui-small);
+        font-weight: 500;
+        line-height: 1.4;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        translate: -50% calc(-100% - 2px);
+        transition: translate 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+
+    .request-toast-out {
+        translate: -50% 8px;
+    }
+
+    .chip-check {
+        width: 12px;
+        height: 12px;
+        flex: none;
+    }
+
+    .chip-check path {
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-dasharray: 1;
+        stroke-dashoffset: 1;
+        animation: chip-check 360ms 80ms ease-out forwards;
+    }
+
+    .chip-copied {
+        animation: chip-pop 320ms ease-out;
+    }
+
+    @keyframes chip-check {
+        to {
+            stroke-dashoffset: 0;
+        }
+    }
+
+    @keyframes chip-pop {
+        30% {
+            scale: 1.08;
+        }
+
+        to {
+            scale: 1;
+        }
+    }
+
+    /* The clipboard fallback: the message, selected, under the chip. */
+    .chip-popover {
+        left: 50%;
+        right: auto;
+        width: min(380px, calc(100vw - 32px));
+        translate: -50% 0;
+        gap: 8px;
+        padding: 12px;
+        color: var(--ink);
+        font-weight: 400;
+        white-space: normal;
+        text-align: start;
+    }
+
+    .chip-popover-text {
+        margin: 0;
+    }
+
+    .chip-popover-area {
+        width: 100%;
+        resize: none;
+        padding: 6px 8px;
+        border: 1px solid var(--rule);
+        border-radius: 6px;
+        background: var(--paper-sunk);
+        color: var(--ink);
+        font: inherit;
+        font-family: var(--font-mono);
+        font-size: 11.5px;
+        line-height: 1.5;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .request-toast {
+            translate: -50% 8px;
+            opacity: 0;
+            transition: opacity 150ms;
+        }
+
+        .request-toast-out {
+            opacity: 1;
+        }
+
+        .chip-check path {
+            stroke-dashoffset: 0;
+            animation: none;
+        }
+
+        .chip-copied {
+            animation: none;
         }
     }
 }

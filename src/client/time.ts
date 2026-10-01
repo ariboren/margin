@@ -7,13 +7,13 @@ export function relativeTime(iso: string, now: number): string {
     }
     const minutes = Math.round(seconds / 60);
     if (minutes < 60) {
-        return `${minutes} min ago`;
+        return `${minutes}m ago`;
     }
     const hours = Math.round(minutes / 60);
     if (hours < 24) {
-        return `${hours} h ago`;
+        return `${hours}h ago`;
     }
-    return `${Math.round(hours / 24)} d ago`;
+    return `${Math.round(hours / 24)}d ago`;
 }
 
 /** Current time, refreshed so relative times and "stalled" stay current. */

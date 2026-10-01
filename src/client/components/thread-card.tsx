@@ -1,11 +1,17 @@
 import type { JSX } from "preact";
-import { useRef, useState } from "preact/hooks";
-import type { DocStore, Thread, ThreadId } from "../../core/model.ts";
+import { useMemo, useRef, useState } from "preact/hooks";
+import type { DocStore, Message, Suggestion, Thread, ThreadId } from "../../core/model.ts";
 import { recall, remember } from "../storage.ts";
 import { relativeTime } from "../time.ts";
 import type { ApplyControls } from "../use-apply.ts";
 import { submitKeys } from "../use-keys.ts";
-import { isStalled } from "../view-model.ts";
+import { MessageBody } from "../render/message.tsx";
+import { needsDeleteConfirm, threadStatus, type ThreadStatus } from "../view-model.ts";
+import { agentTipLine } from "./agent-chip.tsx";
+import { AgentMark } from "./agent-marks.tsx";
+import { CardHead } from "./card-head.tsx";
+import { authorLabel, suggestionLabel, summarize } from "./thread-summary.ts";
+import { Tooltip } from "./tooltip.tsx";
 
 interface ThreadCardProps {
     store: DocStore;
@@ -14,7 +20,13 @@ interface ThreadCardProps {
     now: number;
     hold: boolean;
     onActivate: () => void;
+    /** Collapses the card again from its header; without it the header only expands. */
+    onDeactivate?: () => void;
+    /** Off, the card is always expanded (the doc notes panel); on, it collapses while inactive. */
+    collapsible?: boolean;
     apply: ApplyControls;
+    /** The doc view's link handler, so message links behave like links in the doc. */
+    followLink: (event: MouseEvent, url: string) => void;
 }
 
 export function ThreadCard({
@@ -24,59 +36,153 @@ export function ThreadCard({
     now,
     hold,
     onActivate,
+    onDeactivate,
+    collapsible = true,
     apply,
+    followLink,
 }: ThreadCardProps): JSX.Element {
     const notice = apply.notice(thread);
-    const stalled = isStalled(thread, now);
-    const messages = active ? thread.messages : collapse(thread.messages);
+    const status = threadStatus(thread, now);
+    const stalled = status === "stalled";
     const pending = thread.suggestion?.status === "pending" ? thread.suggestion : undefined;
-
+    const expanded = active || !collapsible;
+    const classes = [
+        "card",
+        active ? "card-active" : expanded ? "" : "card-collapsed",
+        thread.state === "resolved" ? "card-resolved" : "",
+    ]
+        .filter(Boolean)
+        .join(" ");
+    // A collapsed card's click bubbles to the card's own activation; the expanded header
+    // collapses it again.
     return (
-        <article
-            class={`card${active ? " card-active" : ""}${thread.state === "resolved" ? " card-resolved" : ""}`}
-            data-card={thread.id}
-            onClick={active ? undefined : onActivate}
-        >
-            <header class="card-head">
-                <StatePill thread={thread} stalled={stalled} />
-                <span class="card-meta">
-                    {thread.id} · {relativeTime(thread.lastActivity, now)}
+        <article class={classes} data-card={thread.id} onClick={active ? undefined : onActivate}>
+            <CardHead
+                expanded={expanded}
+                interactive={collapsible}
+                onToggle={active ? onDeactivate : undefined}
+                pill={<span class={`pill pill-${status}`}>{statusLabels[status]}</span>}
+                meta={`${thread.id} · ${relativeTime(thread.lastActivity, now)}`}
+                summary={collapsible ? <Summary thread={thread} stalled={stalled} /> : undefined}
+            />
+            {expanded ? (
+                <Body
+                    thread={thread}
+                    pending={pending}
+                    stalled={stalled}
+                    apply={apply}
+                    followLink={followLink}
+                    store={store}
+                />
+            ) : null}
+            {notice ? (
+                <p class="card-notice" role="alert">
+                    {notice}
+                </p>
+            ) : null}
+            {expanded ? (
+                <CardActions
+                    store={store}
+                    thread={thread}
+                    hold={hold}
+                    pending={pending !== undefined}
+                />
+            ) : null}
+        </article>
+    );
+}
+
+function Summary({ thread, stalled }: { thread: Thread; stalled: boolean }): JSX.Element {
+    // Keyed on what the summary reads: every snapshot brings new thread objects, and the preview
+    // parses the last message's markdown.
+    const last = thread.messages[thread.messages.length - 1];
+    const summary = useMemo(
+        () => summarize(thread),
+        [last?.text, last?.by, thread.suggestion?.by, thread.anchor?.exact],
+    );
+    return (
+        <>
+            {summary.speaker ? <span class="card-speaker">{summary.speaker}</span> : null}
+            <span class="card-preview">
+                {summary.preview}
+                {thread.state === "working" && !stalled ? (
+                    <>
+                        {" "}
+                        <Dots />
+                    </>
+                ) : null}
+            </span>
+        </>
+    );
+}
+
+/**
+ * "Agent" or "You". An agent message that recorded who wrote it shows the name and client on
+ * hover or focus, so the chip in the bar and the replies read as one speaker.
+ */
+function AuthorLabel({ message }: { message: Message }): JSX.Element {
+    const label = authorLabel(message.by);
+    const { agent } = message;
+    if (!agent) {
+        return <span class="message-author">{label}</span>;
+    }
+    return (
+        <Tooltip
+            align="start"
+            text={
+                <span class="tip-agent">
+                    <AgentMark client={agent.client} />
+                    {agentTipLine(agent)}
                 </span>
-            </header>
+            }
+        >
+            {(tip) => (
+                <span class="message-author" tabIndex={0} aria-describedby={tip}>
+                    {label}
+                </span>
+            )}
+        </Tooltip>
+    );
+}
+
+interface BodyProps {
+    store: DocStore;
+    thread: Thread;
+    pending: Suggestion | undefined;
+    stalled: boolean;
+    apply: ApplyControls;
+    followLink: (event: MouseEvent, url: string) => void;
+}
+
+/** Everything between the header and the reply box: the quote, the messages, the suggestion. */
+function Body({ store, thread, pending, stalled, apply, followLink }: BodyProps): JSX.Element {
+    const { messages } = thread;
+    return (
+        <>
             {thread.detached ? (
                 <p class="card-detached">
                     <span>The quoted text is no longer in the doc.</span>
-                    <s>{thread.anchor.exact}</s>
+                    <s>{thread.anchor?.exact}</s>
                 </p>
             ) : null}
             {thread.followsEdit !== undefined ? (
                 <p class="card-note">Follow-through on your edit</p>
             ) : null}
             <ol class="messages">
-                {messages.map((message) =>
-                    message === "more" ? (
-                        <li key="more" class="messages-more">
-                            {thread.messages.length - 2} more
-                        </li>
-                    ) : (
-                        <li
-                            key={message.seq}
-                            class={message.by === "agent" ? "message message-agent" : "message"}
-                        >
-                            <span class="message-author">
-                                {message.by === "agent" ? "Agent" : "You"}
-                            </span>
-                            <p>{message.text}</p>
-                        </li>
-                    ),
-                )}
+                {messages.map((message) => (
+                    <li
+                        key={message.seq}
+                        class={message.by === "agent" ? "message message-agent" : "message"}
+                    >
+                        <AuthorLabel message={message} />
+                        <MessageBody text={message.text} followLink={followLink} />
+                    </li>
+                ))}
             </ol>
             {thread.state === "working" ? <Working stalled={stalled} /> : null}
             {pending ? (
                 <div class="suggestion-box">
-                    <span class="suggestion-label">
-                        {pending.by === "agent" ? "Agent suggests an edit" : "Your suggested edit"}
-                    </span>
+                    <span class="suggestion-label">{suggestionLabel(pending.by)}</span>
                     <span class="suggestion-actions">
                         <button
                             type="button"
@@ -116,60 +222,39 @@ export function ThreadCard({
                     )}
                 </div>
             ) : null}
-            {notice ? (
-                <p class="card-notice" role="alert">
-                    {notice}
-                </p>
-            ) : null}
-            {active ? (
-                <CardActions
-                    store={store}
-                    thread={thread}
-                    hold={hold}
-                    pending={pending !== undefined}
-                />
-            ) : null}
-        </article>
+        </>
     );
 }
 
-function collapse<T>(messages: T[]): (T | "more")[] {
-    if (messages.length <= 2) {
-        return messages;
-    }
-    return [messages[0]!, "more", messages[messages.length - 1]!];
-}
-
-const stateLabels: Record<Thread["state"], string> = {
+const statusLabels: Record<ThreadStatus, string> = {
     draft: "Draft",
     open: "Open",
-    working: "Agent working",
+    notified: "Agent notified",
+    working: "Agent responding",
     replied: "Replied",
     resolved: "Resolved",
+    detached: "Detached",
+    stalled: "Stalled",
 };
-
-function StatePill({ thread, stalled }: { thread: Thread; stalled: boolean }): JSX.Element {
-    if (thread.detached && thread.state !== "resolved") {
-        return <span class="pill pill-detached">Detached</span>;
-    }
-    if (stalled) {
-        return <span class="pill pill-stalled">Stalled</span>;
-    }
-    return <span class={`pill pill-${thread.state}`}>{stateLabels[thread.state]}</span>;
-}
 
 function Working({ stalled }: { stalled: boolean }): JSX.Element {
     return stalled ? (
         <p class="working working-stalled">No reply from the agent for over 10 minutes.</p>
     ) : (
         <p class="working">
-            <span class="dots" aria-hidden="true">
-                <span />
-                <span />
-                <span />
-            </span>
-            Agent is working on this
+            <Dots />
+            Agent is responding
         </p>
+    );
+}
+
+function Dots(): JSX.Element {
+    return (
+        <span class="dots" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+        </span>
     );
 }
 
@@ -196,6 +281,7 @@ function useReplyDraft(id: ThreadId): [string, (text: string) => void] {
 
 function CardActions({ store, thread, hold, pending }: CardActionsProps): JSX.Element {
     const [text, setText] = useReplyDraft(thread.id);
+    const [confirming, setConfirming] = useState(false);
     const [focused, setFocused] = useState(false);
     const input = useRef<HTMLTextAreaElement>(null);
     const [sending, setSending] = useState(false);
@@ -220,9 +306,41 @@ function CardActions({ store, thread, hold, pending }: CardActionsProps): JSX.El
     const send = () => void submit(async (reply) => await store.reply(thread.id, reply));
     // Buttons act without first blurring the field, so the row does not jump under the pointer.
     const keepFocus = (event: MouseEvent) => event.preventDefault();
+    const remove = () => void store.deleteThread(thread.id);
+    const requestDelete = () => (needsDeleteConfirm(thread) ? setConfirming(true) : remove());
+    const deleteButton = (
+        <button
+            type="button"
+            class="button button-quiet"
+            onMouseDown={keepFocus}
+            onClick={requestDelete}
+        >
+            Delete
+        </button>
+    );
+    if (confirming) {
+        return (
+            <div class="card-confirm" role="group" aria-label="Confirm delete">
+                <span>Delete this thread?</span>
+                <span class="card-actions-end">
+                    <button
+                        type="button"
+                        class="button button-quiet"
+                        onClick={() => setConfirming(false)}
+                    >
+                        Cancel
+                    </button>
+                    <button type="button" class="button button-danger" onClick={remove}>
+                        Delete
+                    </button>
+                </span>
+            </div>
+        );
+    }
     if (thread.state === "resolved") {
         return (
             <div class="card-actions">
+                {deleteButton}
                 <button
                     type="button"
                     class="button button-quiet"
@@ -248,24 +366,8 @@ function CardActions({ store, thread, hold, pending }: CardActionsProps): JSX.El
                 onKeyDown={submitKeys(send, () => input.current?.blur())}
             />
             <div class="card-actions">
-                <label
-                    class="switch"
-                    title="Let the agent apply its edits to this thread without review"
-                >
-                    <input
-                        type="checkbox"
-                        checked={thread.autoApply}
-                        onChange={(event) =>
-                            void store.setSetting(
-                                "autoApply",
-                                event.currentTarget.checked,
-                                thread.id,
-                            )
-                        }
-                    />
-                    <span>Auto-apply</span>
-                </label>
                 <span class="card-actions-end">
+                    {deleteButton}
                     {pending && text.trim() ? (
                         <button
                             type="button"

@@ -2,14 +2,17 @@ import type { Heading, Root } from "mdast";
 import { toString } from "mdast-util-to-string";
 import { resolveAnchor } from "../core/anchor.ts";
 import { docTree, flattenUnits, unitAt } from "../core/blocks.ts";
-import type {
-    DocSnapshot,
-    EditEvent,
-    Offset,
-    Range,
-    Thread,
-    ThreadId,
-    Unit,
+import { netEdits } from "../core/diff.ts";
+import {
+    isDocNote,
+    type DocSnapshot,
+    type EditEvent,
+    type Offset,
+    type Range,
+    type Thread,
+    type ThreadId,
+    type ThreadState,
+    type Unit,
 } from "../core/model.ts";
 
 type DecorationKind = "comment" | "draft" | "suggest" | "applied" | "pending" | "resolved";
@@ -64,29 +67,112 @@ export interface DocView {
     /** Open threads in document order, for `j`/`k`. */
     order: ThreadId[];
     decorations: Decoration[];
-    /** User edits the agent has not been asked to follow through on. */
+    /**
+     * User edits the agent has not been asked to follow through on, with a card each; empty
+     * unless resolved threads are shown, since a done edit is no more actionable than one.
+     */
     userEdits: EditEvent[];
+    /** What the "show resolved" setting governs: resolved threads plus the edit cards. */
+    settled: number;
 }
 
 export function isStalled(thread: Thread, now: number): boolean {
     return thread.state === "working" && now - Date.parse(thread.lastActivity) > 10 * 60_000;
 }
 
+/**
+ * An open thread the agent's `margin watch` has printed but nothing has claimed yet: a cursor
+ * that named it came after its last activity. A cursor that moved past it unprinted names it not.
+ */
+function isAgentNotified(thread: Thread): boolean {
+    return (
+        thread.state === "open" &&
+        thread.notifiedAt !== undefined &&
+        Date.parse(thread.notifiedAt) > Date.parse(thread.lastActivity)
+    );
+}
+
+/** A held draft deletes at once; a thread the agent may have seen asks first. */
+export function needsDeleteConfirm(thread: Thread): boolean {
+    return thread.state !== "draft";
+}
+
+export type ThreadStatus = ThreadState | "detached" | "stalled" | "notified";
+
+/** The quote is gone and the thread is still open. A doc note has no quote, so it never is. */
+export function isDetached(thread: Thread): boolean {
+    return thread.detached && thread.state !== "resolved";
+}
+
+/** What a thread card's pill shows. */
+export function threadStatus(thread: Thread, now: number): ThreadStatus {
+    if (isDetached(thread)) {
+        return "detached";
+    }
+    if (isStalled(thread, now)) {
+        return "stalled";
+    }
+    if (isAgentNotified(thread)) {
+        return "notified";
+    }
+    return thread.state;
+}
+
 export function unitKey(unit: Pick<Unit, "kind" | "start">): string {
     return `${unit.kind}@${unit.start}`;
 }
 
+/** Where a thread's card sits; a doc note has no place in the doc and never asks. */
 export function threadPosition(view: DocView, thread: Thread): Offset {
-    return view.ranges.get(thread.id)?.start ?? thread.anchor.hint;
+    return view.ranges.get(thread.id)?.start ?? thread.anchor?.hint ?? 0;
 }
 
-/** `showResolved` paints resolved threads faintly; otherwise their text carries no highlight. */
+/** Threads with a place in the doc: everything but doc notes. */
+export function anchoredThreads(threads: readonly Thread[]): Thread[] {
+    return threads.filter((thread) => !isDocNote(thread));
+}
+
+/** Doc notes, resolved ones only on request, oldest first (the panel reads like a chat). */
+export function docNotes(threads: readonly Thread[], showResolved: boolean): Thread[] {
+    return threads.filter(
+        (thread) => isDocNote(thread) && (showResolved || thread.state !== "resolved"),
+    );
+}
+
+/**
+ * The highest agent message seq across `threads`, 0 with none: what the doc notes panel and the
+ * tab title count unread replies against.
+ */
+export function latestAgentSeq(threads: readonly Thread[]): number {
+    let latest = 0;
+    for (const thread of threads) {
+        for (const message of thread.messages) {
+            if (message.by === "agent") latest = Math.max(latest, message.seq);
+        }
+    }
+    return latest;
+}
+
+/** The agent is on a doc note: notified of it or responding to it. */
+export function docNotesBusy(notes: readonly Thread[], now: number): boolean {
+    return notes.some((note) => {
+        const status = threadStatus(note, now);
+        return status === "notified" || status === "working";
+    });
+}
+
+/**
+ * `showResolved` paints resolved threads faintly; otherwise their text carries no highlight. Doc
+ * notes have no range, decoration, outline count or place in the `j`/`k` order.
+ */
 export function buildView(snapshot: DocSnapshot, showResolved = false): DocView {
-    const { doc, threads } = snapshot;
+    const { doc } = snapshot;
+    const threads = anchoredThreads(snapshot.threads);
     const { tree, shift } = docTree(doc);
     const ranges = new Map<ThreadId, Range>();
     for (const thread of threads) {
-        const range = thread.detached ? null : resolveAnchor(doc.source, thread.anchor);
+        const range =
+            thread.detached || !thread.anchor ? null : resolveAnchor(doc.source, thread.anchor);
         if (range) {
             ranges.set(thread.id, range);
         }
@@ -121,7 +207,8 @@ export function buildView(snapshot: DocSnapshot, showResolved = false): DocView 
     }
 
     const live = threads.filter((thread) => thread.state !== "resolved");
-    const position = (thread: Thread): Offset => ranges.get(thread.id)?.start ?? thread.anchor.hint;
+    const position = (thread: Thread): Offset =>
+        ranges.get(thread.id)?.start ?? thread.anchor?.hint ?? 0;
     const headings = tree.children.filter((node): node is Heading => node.type === "heading");
     const slugs = headingSlugs(headings.map((heading) => toString(heading)));
     const outline = headings.map((heading, index) => {
@@ -144,11 +231,14 @@ export function buildView(snapshot: DocSnapshot, showResolved = false): DocView 
     const order = [...live].sort((a, b) => position(a) - position(b)).map((thread) => thread.id);
 
     const followed = new Set(
-        threads.map((thread) => thread.followsEdit).filter((seq) => seq !== undefined),
+        snapshot.threads.map((thread) => thread.followsEdit).filter((seq) => seq !== undefined),
     );
-    const userEdits = snapshot.edits
-        .filter((edit) => edit.cause === "user" && !followed.has(edit.seq))
+    const edits = netEdits(
+        snapshot.edits.filter((edit) => edit.cause === "user" || edit.cause === "undo"),
+    )
+        .filter((edit) => !followed.has(edit.seq))
         .slice(-3);
+    const resolved = snapshot.threads.filter((thread) => thread.state === "resolved").length;
 
     return {
         tree,
@@ -158,7 +248,8 @@ export function buildView(snapshot: DocSnapshot, showResolved = false): DocView 
         outline,
         order,
         decorations,
-        userEdits,
+        userEdits: showResolved ? edits : [],
+        settled: resolved + edits.length,
     };
 }
 
@@ -172,4 +263,9 @@ export function editRange(source: string, edit: EditEvent): Range | null {
 
 export function unitFor(snapshot: DocSnapshot, offset: Offset): Unit | undefined {
     return unitAt(snapshot.doc.units, { start: offset, end: offset });
+}
+
+/** Working threads with no activity for the stall window, in thread order. */
+export function stalledThreads(threads: readonly Thread[], now: number): ThreadId[] {
+    return threads.filter((thread) => isStalled(thread, now)).map((thread) => thread.id);
 }

@@ -2,7 +2,8 @@ import { useEffect, useRef } from "preact/hooks";
 
 type KeyMap = Partial<Record<string, () => void>>;
 
-function typing(target: EventTarget | null): boolean {
+/** The key event comes from a text field, whose own editing keys must win. */
+export function typing(target: EventTarget | null): boolean {
     return (
         target instanceof HTMLElement &&
         (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))

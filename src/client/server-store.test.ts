@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { hashText } from "../core/blocks.ts";
-import type { SaveResult } from "../core/model.ts";
+import type { Connection, SaveResult } from "../core/model.ts";
 import type { MutationName, WireSnapshot } from "../server/protocol.ts";
-import { RequestError, ServerStore, type Connection, type Transport } from "./server-store.ts";
+import { RequestError, ServerStore, type Transport } from "./server-store.ts";
 
 const SOURCE = "# Doc\n\nFirst paragraph.\n\nSecond paragraph.\n";
+const FOREMAN = { name: "foreman", client: "claude-code" } as const;
 
 function wire(version: number, source = SOURCE, extra: Partial<WireSnapshot> = {}): WireSnapshot {
     return {
@@ -14,10 +15,10 @@ function wire(version: number, source = SOURCE, extra: Partial<WireSnapshot> = {
         hash: hashText(source),
         threads: [],
         edits: [],
-        settings: { hold: false, suggestionsOnly: false, autoApply: false },
+        settings: { hold: false, autoApply: false },
         missing: false,
         version,
-        agentWatching: false,
+        agents: [],
         ...extra,
     };
 }
@@ -83,12 +84,43 @@ async function settled<T>(promise: Promise<T>): Promise<{ done: boolean; value?:
 }
 
 describe("ServerStore", () => {
+    test("delete and undelete post the thread id", async () => {
+        const fake = fakeTransport(wire(4));
+        const store = new ServerStore(fake.transport, wire(4));
+        fake.answer({ ok: true, version: 4 });
+        fake.answer({ ok: true, version: 4 });
+        await store.deleteThread("c2");
+        await store.undeleteThread("c2");
+        expect(fake.posted).toEqual([
+            { name: "delete", body: { id: "c2" } },
+            { name: "undelete", body: { id: "c2" } },
+        ]);
+    });
+
+    test("thread actions answer with their event's seq, and retract posts it back", async () => {
+        const fake = fakeTransport(wire(4));
+        const store = new ServerStore(fake.transport, wire(4));
+        fake.answer({ ok: true, seq: 5, version: 5 });
+        fake.advance(wire(5));
+        expect(await store.actions.reply("c2", "More")).toEqual({ ok: true, seq: 5 });
+        fake.answer({ ok: true, version: 6 });
+        fake.advance(wire(6));
+        expect(await store.retract("c2", 5)).toEqual({ ok: true });
+        fake.answer({ ok: false, reason: "seen", version: 6 });
+        expect(await store.retract("c2", 5)).toEqual({ ok: false, reason: "seen" });
+        expect(fake.posted.map((post) => post.body)).toEqual([
+            { id: "c2", text: "More" },
+            { id: "c2", seq: 5 },
+            { id: "c2", seq: 5 },
+        ]);
+    });
+
     test("parses the pushed source and passes presence through", () => {
-        const fake = fakeTransport(wire(3, SOURCE, { agentWatching: true }));
-        const store = new ServerStore(fake.transport, wire(3, SOURCE, { agentWatching: true }));
+        const fake = fakeTransport(wire(3, SOURCE, { agents: [FOREMAN] }));
+        const store = new ServerStore(fake.transport, wire(3, SOURCE, { agents: [FOREMAN] }));
         expect(store.snapshot().doc.source).toBe(SOURCE);
         expect(store.snapshot().doc.units.length).toBe(3);
-        expect(store.snapshot().agentWatching).toBe(true);
+        expect(store.snapshot().agents).toEqual([FOREMAN]);
         expect(store.snapshot().version).toBe(3);
     });
 
@@ -118,7 +150,7 @@ describe("ServerStore", () => {
     test("a save that names its snapshot's version sends that one, not the newest", async () => {
         const fake = fakeTransport(wire(4));
         const store = new ServerStore(fake.transport, wire(4));
-        fake.push(wire(6, SOURCE, { agentWatching: true }));
+        fake.push(wire(6, SOURCE, { agents: [FOREMAN] }));
         fake.answer({ ok: true, version: 7 });
         const edit = { start: 0, before: "# Doc", after: "# Title", version: 4 };
         const saving = store.saveUnit(edit);
@@ -149,9 +181,7 @@ describe("ServerStore", () => {
         const fake = fakeTransport(wire(1));
         const store = new ServerStore(fake.transport, wire(1), 20);
         fake.answer({ ok: true, version: 2 });
-        fake.advance(
-            wire(2, SOURCE, { settings: { hold: true, suggestionsOnly: false, autoApply: false } }),
-        );
+        fake.advance(wire(2, SOURCE, { settings: { hold: true, autoApply: false } }));
         await store.setHold(true);
         expect(fake.fetches()).toBe(1);
         expect(store.snapshot().settings.hold).toBe(true);
@@ -163,8 +193,8 @@ describe("ServerStore", () => {
         const doc = store.snapshot().doc;
         fake.push(wire(4, "# Old\n"));
         expect(store.snapshot().version).toBe(5);
-        fake.push(wire(5, SOURCE, { agentWatching: true }));
-        expect(store.snapshot().agentWatching).toBe(true);
+        fake.push(wire(5, SOURCE, { agents: [FOREMAN] }));
+        expect(store.snapshot().agents).toEqual([FOREMAN]);
         expect(store.snapshot().doc).toBe(doc);
     });
 

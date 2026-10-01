@@ -150,8 +150,8 @@ describe("memory store", () => {
 
     test("auto-apply lands an agent edit that revert restores byte for byte", async () => {
         const { store, clock } = setup();
+        await store.setSetting("autoApply", true);
         const id = await store.comment({ anchor: anchorOn(store, quote), text: "Shorter please" });
-        await store.setSetting("autoApply", true, id);
         clock.advance(400);
         const applied = thread(store, id).applied!;
         expect(applied).toMatchObject({ before: quote, reverted: false });
@@ -161,18 +161,13 @@ describe("memory store", () => {
         expect(thread(store, id).applied?.reverted).toBe(true);
     });
 
-    test("suggestions only downgrades an agent apply to a suggestion", async () => {
+    test("without auto-apply an agent edit arrives as a suggestion", async () => {
         const { store, clock } = setup();
-        await store.setSetting("suggestionsOnly", true);
-        const id = await store.comment({
-            anchor: anchorOn(store, quote),
-            text: "Go ahead and tighten this",
-        });
+        const id = await store.comment({ anchor: anchorOn(store, quote), text: "Shorter please" });
         clock.advance(400);
         expect(store.snapshot().doc.source).toBe(doc);
         expect(thread(store, id).suggestion?.status).toBe("pending");
         expect(thread(store, id).applied).toBeUndefined();
-        expect(thread(store, id).messages.at(-1)?.text).toContain("suggestions only");
     });
 
     test("hold keeps drafts quiet until send all", async () => {

@@ -4,7 +4,7 @@
     font-display: swap;
     font-weight: 200 900;
     src: url("@fontsource-variable/source-serif-4/files/source-serif-4-latin-opsz-normal.woff2")
-        format("woff2-variations");
+        format("woff2");
 }
 
 @font-face {
@@ -13,7 +13,7 @@
     font-display: swap;
     font-weight: 200 900;
     src: url("@fontsource-variable/source-serif-4/files/source-serif-4-latin-opsz-italic.woff2")
-        format("woff2-variations");
+        format("woff2");
 }
 
 @font-face {
@@ -21,8 +21,7 @@
     font-style: normal;
     font-display: swap;
     font-weight: 100 900;
-    src: url("@fontsource-variable/inter/files/inter-latin-wght-normal.woff2")
-        format("woff2-variations");
+    src: url("@fontsource-variable/inter/files/inter-latin-wght-normal.woff2") format("woff2");
 }
 
 @font-face {
@@ -31,5 +30,5 @@
     font-display: swap;
     font-weight: 100 800;
     src: url("@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2")
-        format("woff2-variations");
+        format("woff2");
 }
