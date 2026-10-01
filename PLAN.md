@@ -44,7 +44,7 @@ By this plan (veto any):
 - **Edit feed is word-diff hunks, not unified diff.** Sample paragraphs are single lines, mean 468 chars, max 1,606. A unified hunk repeats the paragraph twice. Format: heading path, line, changed words with 4 words of context.
 - **`pending` context is capped:** quote up to 600 B, then 240 B each side, clipped to the unit. Table: the cell, its column header, the row's first cell. Sample table rows average 676 chars; a whole table would cost thousands of tokens. `margin show <id>` returns the full unit on demand.
 - **Conflict model (brief Q4):** server watches the doc's directory (editors rename on save). Own writes ignored by hash. Outside change: reparse, align, re-anchor, push to tabs. Open editor whose unit changed: bar with keep mine / take theirs, draft also kept in localStorage. Saves are compare-and-swap on the unit's `before` text, so unrelated changes elsewhere never block a save. File missing: banner, state kept.
-- **Agent teaching (brief Q5):** `margin agent-help` is canonical, at most 1,500 B. Claude Code skill and `AGENTS.md` snippet are generated from it. `margin doc.md` prints it when stdout is not a TTY.
+- **Agent teaching (brief Q5):** `margin agent-help` is canonical, at most 1,700 B (raised from 1,500 B for the doc status lines, owner, 2026-10-01). Claude Code skill and `AGENTS.md` snippet are generated from it. `margin doc.md` prints it when stdout is not a TTY.
 - **Security:** bind 127.0.0.1, check Host and Origin, per-daemon token, serve registered docs only, raw HTML in markdown rendered as text, images only from the doc's directory.
 
 ## Agent contract
@@ -52,17 +52,19 @@ By this plan (veto any):
 ```
 margin <doc>                         open (daemon + tab)
 margin watch <doc>                   per debounced batch: new c7 c8 c9 "2. Findings > A1" | reply c3 | rejected c5
+                                     doc status first when it changed: approved | declined | reopened | finish c3 c5
 margin pending <doc> [--wait] --json threads awaiting agent + user edits since last read; claims them
+                                     line 1 while it stands: approved[ changed][: note] | declined[: note] | finish | reopened (once)
 margin show <id>                     full unit + full thread
 margin reply <id> "text" [--resolve]
 margin suggest <id> --replace "text" [--apply] [-m "note"]     --replace - reads stdin (backticks, $)
 margin suggest --find "exact" --replace "text"                 agent-initiated thread (follow-through)
 margin resolve <id>
-margin agent-help | stop | status
+margin agent-help | stop | status | --version
 margin setup [--user]                installs the Claude Code skill (project .claude/skills/margin, or ~/.claude/skills with --user); prints the AGENTS.md snippet
 ```
 
-`pending` sends full messages for unclaimed threads, otherwise only messages after the agent's last one. Resolved threads never.
+`pending` sends full messages for unclaimed threads, otherwise only messages after the agent's last one. Resolved threads never. `verdict` and `finish` are the user's events, written by the page; the agent CLI has no command that logs either, and `pending --wait` returns on each of the status words above.
 
 ## Token budget
 
@@ -74,7 +76,7 @@ Baseline: one read of the sample = 165,788 B, about 41k tokens.
 | `pending`, per thread, excluding messages   | median 700 B, max 1,300 B         |
 | `pending`, per user edit                    | 200 B + 60 B per extra hunk + changed words |
 | `reply` / `resolve` / `suggest` ack         | 24 B                              |
-| `agent-help`                                | 1,500 B                           |
+| `agent-help`                                | 1,700 B                           |
 | 10 seeded threads, full loop, all CLI output | 8 KB total, under 5% of the file |
 
 Turns matter more than bytes: each agent wake re-reads its context. Target 1 wake per batch. Per batch: `pending` (chained with `show` where needed) in one call, then one chained shell call for all replies.
