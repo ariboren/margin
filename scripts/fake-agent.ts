@@ -29,6 +29,8 @@ export interface Call {
 export interface PendingThreadBlock {
     id: ThreadId;
     state: string;
+    /** A doc note: no quote, line 0, empty path. */
+    doc: boolean;
     line: number;
     path: string;
     quote: string;
@@ -87,6 +89,8 @@ function parseCompact(text: string): CompactLine {
             groups.push({ reason: word as WakeReason, ids: [] });
         } else if (group && isThreadId(word)) {
             group.ids.push(word);
+        } else if (group && word === "doc") {
+            group.doc = true;
         } else {
             throw new Error("unrecognised compact line");
         }
@@ -126,23 +130,26 @@ export function parsePending(stdout: string): PendingOutput {
             });
             continue;
         }
-        const thread = /^(c\d+) (\S+)(?: detached)? L(\d+) ?(.*)$/.exec(head);
+        // `c3 open doc` is a doc note: no clip line, so its messages start at once.
+        const thread = /^(c\d+) (\S+)(?: detached)?(?: L(\d+) ?(.*)| doc)$/.exec(head);
         const id = thread?.[1];
         if (!thread || !id || !isThreadId(id)) throw new Error("unrecognised pending block");
-        const context = body[0]?.slice(2) ?? "";
+        const doc = thread[3] === undefined;
+        const context = doc ? "" : (body[0]?.slice(2) ?? "");
         const open = context.indexOf("[[");
         const close = context.lastIndexOf("]]");
         const messages = body
-            .slice(1)
+            .slice(doc ? 0 : 1)
             .map((line) => /^ {2}(user|agent): (.*)$/.exec(line))
             .filter((match) => match !== null)
             .map((match) => ({ by: match[1]!, text: unescapeLine(match[2]!) }));
         out.threads.push({
             id,
             state: thread[2]!,
-            line: Number(thread[3]),
-            path: thread[4]!,
-            quote: unescapeLine(context.slice(open + 2, close)),
+            doc,
+            line: doc ? 0 : Number(thread[3]),
+            path: thread[4] ?? "",
+            quote: doc ? "" : unescapeLine(context.slice(open + 2, close)),
             messages,
             text: block.join("\n"),
         });

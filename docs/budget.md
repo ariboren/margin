@@ -2,7 +2,8 @@
 
 Bytes of real CLI stdout, from `bun run budget` (public sample) and `bun run budget --sample private`
 (the private sample, which is not in the repo). Ceilings are in `budget.json`; the method is in
-`scripts/budget.ts`. Measured 2026-09-30 after the compact-only watch line; `agent-help` at `1d4a833`.
+`scripts/budget.ts`. Measured 2026-09-30 after the compact-only watch line; `agent-help` after the no-chat rule, the
+`--as` naming line (ceiling raised 1,450 → 1,500 B, owner, 2026-09-30) and dropping the `downgraded` ack (#11); 1,479 B after naming the `resolved`, `deleted` and `locked` errors.
 
 | Operation                                    | Ceiling (B) | Public (B) | Private (B) |
 | -------------------------------------------- | ----------: | ---------: | ----------: |
@@ -11,7 +12,7 @@ Bytes of real CLI stdout, from `bun run budget` (public sample) and `bun run bud
 | `pending`, per thread, max                   |       1,300 |        664 |         674 |
 | `pending`, per user edit (base)              |         200 |        120 |         147 |
 | `reply` / `resolve` / `suggest` ack          |          24 |         16 |          16 |
-| `agent-help`                                 |       1,400 |      1,345 |       1,345 |
+| `agent-help`                                 |       1,500 |      1,479 |       1,479 |
 | 10 seeded threads, full loop, all CLI output |       8,000 |      4,755 |       4,978 |
 
 `pending` as plain text against `--json` for the same seeded state:

@@ -2,8 +2,17 @@
 // what it returns and moves the pending cursor, so edits ride along exactly once.
 import { unitAt } from "../core/blocks.ts";
 import { docTitle } from "../core/context.ts";
-import { pendingEdit } from "../core/diff.ts";
-import type { EditEvent, EventInput, PendingJson, PendingThread, Thread } from "../core/model.ts";
+import { netEdits, pendingEdit } from "../core/diff.ts";
+import {
+    type AgentIdentity,
+    isDocNote,
+    type EditEvent,
+    type EventInput,
+    type PendingJson,
+    type PendingThread,
+    type Thread,
+} from "../core/model.ts";
+import { UNKNOWN_AGENT } from "../core/agent.ts";
 import { transact } from "../core/log.ts";
 import { withPresence } from "../server/presence.ts";
 import { needsAgent } from "../core/threads.ts";
@@ -25,13 +34,15 @@ function newMessages(thread: Thread): PendingThread["messages"] {
 }
 
 export function pendingThread(view: DocView, thread: Thread): PendingThread {
-    const { range, context } = locate(view, thread);
+    const { detached, context } = locate(view, thread);
+    const doc = isDocNote(thread);
     const out: PendingThread = {
         id: thread.id,
         state: thread.state,
+        ...(doc ? { doc: true as const } : {}),
         path: context.path,
         line: context.line,
-        detached: range === null,
+        detached,
         quote: context.quote,
         before: context.before,
         after: context.after,
@@ -65,12 +76,10 @@ export function buildPending(view: DocView): PendingJson {
     const threads = [...state.threads.values()]
         .filter(needsAgent)
         .map((thread) => pendingThread(view, thread));
-    const edits = state.edits
-        .filter(
-            (edit) =>
-                edit.seq > state.cursors.pending &&
-                (edit.cause === "user" || edit.cause === "revert"),
-        )
+    const edits = netEdits(
+        state.edits.filter((edit) => ["user", "revert", "undo"].includes(edit.cause)),
+        state.cursors.pending,
+    )
         .map((edit) =>
             pendingEdit({
                 ...inUnit(view, edit),
@@ -83,10 +92,14 @@ export function buildPending(view: DocView): PendingJson {
     return { threads, edits };
 }
 
-export async function pending(
-    docPath: string,
-    options: { json?: boolean; write: (text: string) => void },
-): Promise<void> {
+export interface PendingOptions {
+    json?: boolean;
+    write: (text: string) => void;
+    agent?: AgentIdentity;
+}
+
+export async function pending(docPath: string, options: PendingOptions): Promise<void> {
+    const by = { by: "agent" as const, ...(options.agent ? { agent: options.agent } : {}) };
     await transact(docPath, (txn) => {
         const view = viewOf(docPath, txn.events);
         const result = buildPending(view);
@@ -95,17 +108,13 @@ export async function pending(
             .map((t) => view.state.threads.get(t.id)!)
             .filter((thread) => !thread.claimed || thread.state === "open")
             .map((thread) => thread.id);
-        if (claims.length > 0) inputs.push({ type: "claim", by: "agent", ids: claims });
+        if (claims.length > 0) inputs.push({ type: "claim", ...by, ids: claims });
         // The agent's own bookkeeping does not move the cursor, or every read would append one.
         const upTo =
             txn.events.findLast((e) => e.type !== "claim" && e.type !== "cursor")?.seq ?? 0;
         if (upTo > view.state.cursors.pending) {
-            inputs.push({
-                type: "cursor",
-                by: "agent",
-                stream: "pending",
-                upTo,
-            });
+            const ids = result.threads.map((thread) => thread.id);
+            inputs.push({ type: "cursor", ...by, stream: "pending", upTo, ids });
         }
         txn.append(inputs);
         options.write(`${options.json ? JSON.stringify(result) : formatPending(result)}\n`);
@@ -115,9 +124,9 @@ export async function pending(
 /** Blocks until a wake lands past the pending cursor and settles; a backlog prints at once. */
 export async function pendingWait(
     docPath: string,
-    options: { json?: boolean; write: (text: string) => void } & WaitOptions,
+    options: PendingOptions & WaitOptions,
 ): Promise<boolean> {
-    const woken = await withPresence(docPath, async () =>
+    const woken = await withPresence(docPath, options.agent ?? UNKNOWN_AGENT, async () =>
         new WakeTail(docPath, "pending", options).next(),
     );
     if (!woken) return false;

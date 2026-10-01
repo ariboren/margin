@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { readLog } from "../core/log.ts";
 import type { Event } from "../core/model.ts";
+import { foldLog } from "../core/threads.ts";
 import { sandbox, type Sandbox } from "./testing.ts";
-import { emitWatch, wakeReason, watch } from "./watch.ts";
+import { DEBOUNCE_MS, emitWatch, wakeReason, watch } from "./watch.ts";
 
 let box: Sandbox;
 
@@ -27,7 +28,7 @@ async function events(): Promise<Event[]> {
 }
 
 describe("wake set", () => {
-    test("new comment, user reply and reject with note wake; the rest never do", async () => {
+    test("new comment, user reply, reject with note and a retract that leaves the thread open wake; the rest never do", async () => {
         const id = await box.comment("cold path", "Why rarely?");
         await box.append(
             { type: "reply", by: "user", id, text: "Also this" },
@@ -37,9 +38,12 @@ describe("wake set", () => {
             { type: "accept", by: "user", id },
             { type: "resolve", by: "user", id },
             { type: "reopen", by: "user", id },
+            { type: "retract", by: "user", id, of: 2 },
         );
         await box.comment("first tile", "Draft", { draft: true });
-        const reasons = (await events()).map((event) => [event.type, wakeReason(event) ?? null]);
+        const log = await events();
+        const state = foldLog(log);
+        const reasons = log.map((event) => [event.type, wakeReason(event, state) ?? null]);
         expect(reasons).toEqual([
             ["comment", "new"],
             ["reply", "reply"],
@@ -49,6 +53,7 @@ describe("wake set", () => {
             ["accept", null],
             ["resolve", null],
             ["reopen", null],
+            ["retract", "reply"],
             ["comment", null],
         ]);
     });
@@ -59,8 +64,9 @@ describe("wake set", () => {
         const out = collect();
         expect(await emitWatch(box.doc, out.write)).toBe(false);
         expect(out.lines).toEqual([]);
-        // The cursor still moved past the batch, so it is never reconsidered.
+        // The cursor still moved past the batch, so it is never reconsidered; it names no thread.
         expect((await box.state()).cursors.watch).toBe(2);
+        expect((await events()).at(-1)).toMatchObject({ type: "cursor", upTo: 2, ids: [] });
     });
 });
 
@@ -75,6 +81,7 @@ describe("emit", () => {
         expect(state.threads.get("c1")!.claimed).toBe(false);
         expect(state.threads.get("c1")!.state).toBe("open");
         expect(state.cursors.watch).toBe(2);
+        expect((await events()).at(-1)).toMatchObject({ type: "cursor", ids: ["c1", "c2"] });
     });
 
     test("a long message changes nothing: the line carries ids and paths only", async () => {
@@ -98,12 +105,85 @@ describe("emit", () => {
         expect(out.lines).toEqual(['new c2 c3 | reply c1 "Findings"\n']);
     });
 
+    test("a group of doc notes prints doc where the path goes; a mixed group prints neither", async () => {
+        await box.note("Overall?");
+        const first = collect();
+        await emitWatch(box.doc, first.write);
+        expect(first.lines).toEqual(["new c1 doc\n"]);
+        await box.note("And the title?");
+        await box.comment("cold path", "Why?");
+        const second = collect();
+        await emitWatch(box.doc, second.write);
+        expect(second.lines).toEqual(["new c2 c3\n"]);
+    });
+
+    test("a delete never prints; an undelete of a waiting thread wakes it as new", async () => {
+        const id = await box.comment("cold path", "Why?");
+        await box.append({ type: "delete", by: "user", id });
+        const out = collect();
+        expect(await emitWatch(box.doc, out.write)).toBe(false);
+        expect(out.lines).toEqual([]);
+        await box.append({ type: "undelete", by: "user", id });
+        expect(await emitWatch(box.doc, out.write)).toBe(true);
+        expect(out.lines).toEqual(['new c1 "Findings"\n']);
+        await box.append({ type: "delete", by: "user", id });
+        expect(await emitWatch(box.doc, out.write)).toBe(false);
+        expect(out.lines).toHaveLength(1);
+    });
+
     test("send wakes drafts", async () => {
         const id = await box.comment("cold path", "Held", { draft: true });
         await box.append({ type: "send", by: "user", ids: [id] });
         const out = collect();
         await emitWatch(box.doc, out.write);
         expect(out.lines).toEqual(['new c1 "Findings"\n']);
+    });
+});
+
+/** Runs `watch` with its default timing until `act` is done and output has been quiet a while. */
+async function watchDefault(act: () => Promise<void>): Promise<{ lines: string[]; ms: number }> {
+    const stop = new AbortController();
+    const out = collect();
+    const running = watch(box.doc, out.write, { signal: stop.signal });
+    await Bun.sleep(200);
+    const started = Date.now();
+    await act();
+    while (out.lines.length === 0 && Date.now() - started < 5_000) await Bun.sleep(5);
+    const ms = Date.now() - started;
+    await Bun.sleep(600);
+    stop.abort();
+    await running;
+    return { lines: out.lines, ms };
+}
+
+describe("default timing", () => {
+    test("a comment reaches the watch line well under a second", async () => {
+        const { lines, ms } = await watchDefault(async () => {
+            await box.comment("cold path", "Why?");
+        });
+        expect(lines).toEqual(['new c1 "Findings"\n']);
+        expect(ms).toBeLessThan(1_000);
+    });
+
+    test("comments landing back to back are one batch", async () => {
+        const { lines } = await watchDefault(async () => {
+            await box.comment("cold path", "One");
+            await box.comment("Retry queue", "Two");
+        });
+        expect(lines).toEqual(['new c1 c2 "Findings"\n']);
+    });
+
+    test("Send all is one line with every held thread", async () => {
+        const { lines } = await watchDefault(async () => {
+            const ids = [
+                await box.comment("cold path", "One", { draft: true }),
+                await box.comment("Retry queue", "Two", { draft: true }),
+                await box.comment("first tile", "Three", { draft: true }),
+            ];
+            await Bun.sleep(DEBOUNCE_MS * 2);
+            await box.append({ type: "send", by: "user", ids });
+        });
+        expect(lines).toEqual(['new c1 c2 c3 "Findings"\n']);
     });
 });
 

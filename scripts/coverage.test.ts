@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-    FLOOR,
+    FLOORS,
+    breaches,
     inScope,
     markdown,
     parseJunit,
@@ -98,22 +99,50 @@ describe("parseJunit", () => {
     });
 });
 
+describe("breaches", () => {
+    const summary = summarize(parseLcov(lcov));
+
+    test("passes when every floored directory meets its floor, whatever an unfloored one is at", () => {
+        expect(breaches(summary, { "src/core": 96 })).toEqual([]);
+    });
+
+    test("names a floored directory under its floor", () => {
+        const [breach] = breaches(summary, { "src/core": 97 });
+        expect(breach?.name).toBe("src/core");
+        expect(breach?.floor).toBe(97);
+        expect(breach?.coverage).toBeCloseTo(96.667, 3);
+    });
+
+    test("a floored directory missing from the report breaches", () => {
+        expect(breaches(summary, { "src/core": 96, "src/server": 50 })).toEqual([
+            { name: "src/server", floor: 50, coverage: undefined },
+        ]);
+    });
+});
+
+describe("FLOORS", () => {
+    test("floors cli, core and server in whole percents and leaves the client unfloored", () => {
+        expect(Object.keys(FLOORS).sort()).toEqual(["src/cli", "src/core", "src/server"]);
+        for (const floor of Object.values(FLOORS)) expect(Number.isInteger(floor)).toBe(true);
+    });
+});
+
 describe("markdown", () => {
     const summary = summarize(parseLcov(lcov));
 
-    test("shows test counts, a row per directory and the total against the floor", () => {
-        const text = markdown({ tests: 10, failures: 1, skipped: 2 }, summary, 85);
+    test("shows test counts, a row per directory with its floor, and the total", () => {
+        const text = markdown({ tests: 10, failures: 1, skipped: 2 }, summary, { "src/core": 96 });
         expect(text).toContain("10 tests: 7 passed, 1 failed, 2 skipped");
-        expect(text).toContain("| src/core | 2 | 290 / 300 | 96.67% |");
-        expect(text).toContain("| total | 3 | 300 / 350 | 85.71% |");
-        expect(text).toContain("The total passes the 85% floor.");
+        expect(text).toContain("| src/core | 2 | 290 / 300 | 96.67% | 96% |");
+        expect(text).toContain("| src/client | 1 | 10 / 50 | 20.00% | none |");
+        expect(text).toContain("| total | 3 | 300 / 350 | 85.71% |  |");
+        expect(text).toContain("Every directory with a floor passes it.");
     });
 
-    test("says when the total is under the floor", () => {
-        expect(markdown(undefined, summary, 86)).toContain("The total fails the 86% floor.");
-    });
-
-    test("the floor is a whole percent", () => {
-        expect(Number.isInteger(FLOOR)).toBe(true);
+    test("names each directory under its floor", () => {
+        const text = markdown(undefined, summary, { "src/core": 97, "src/server": 80 });
+        expect(text).toContain(
+            "Coverage fails: src/core is at 96.67%, under its 97% floor; src/server has no coverage data.",
+        );
     });
 });

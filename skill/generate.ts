@@ -18,6 +18,10 @@ type Output = keyof typeof outputs;
 const generated =
     "Generated from `margin agent-help` by `bun run skill`; edit src/cli/agent-help.md.";
 
+/** Outside the fenced help, so the agent-help byte ceiling does not pay for it. */
+const naming =
+    "Pass `--as <name>` on every margin command, or set `MARGIN_AGENT`, so the page shows who is answering; without it the page names your client.";
+
 function fenced(help: string): string {
     return `\`\`\`text\n${help.replace(/\n?$/, "\n")}\`\`\`\n`;
 }
@@ -32,11 +36,19 @@ export function render(help: string): Record<Output, string> {
             "",
             generated,
             "",
+            naming,
+            "",
             fenced(help),
         ].join("\n"),
-        snippet: ["## margin (markdown review threads)", "", generated, "", fenced(help)].join(
-            "\n",
-        ),
+        snippet: [
+            "## margin (markdown review threads)",
+            "",
+            generated,
+            "",
+            naming,
+            "",
+            fenced(help),
+        ].join("\n"),
     };
 }
 

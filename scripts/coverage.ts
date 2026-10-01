@@ -1,12 +1,24 @@
 // Runs the suite once with line coverage and a junit report, prints test counts and line coverage of
-// src/ per directory, and fails when the total drops below FLOOR. In CI the same table goes to the
-// job summary. Bun's own coverageThreshold applies per file, so the total is summed here from lcov.
+// src/ per directory, and fails when a directory in FLOORS drops below its floor. In CI the same
+// table goes to the job summary. Bun's own coverageThreshold applies per file, so each directory is
+// summed here from lcov.
 import { existsSync, mkdtempSync, readFileSync, rmSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-/** Whole percent, set at the measured total rounded down (86.72% at W6a). */
-export const FLOOR = 86;
+/**
+ * Whole percent per directory, each set at its measured level rounded down (cli 94.16%, core
+ * 99.12%, server 89.72% at v0.2.0). Bun only counts files a test loads, so one floor on the total
+ * moved whenever a client test imported a component: the client's unit tests load app.tsx and the
+ * components for their pure helpers, and every render path they leave unrun lands in the
+ * denominator. The UI is covered by browser checks and e2e, not unit line coverage, so src/client
+ * is reported with no floor, and the logic layers keep a floor each that a client import can't move.
+ */
+export const FLOORS: Readonly<Record<string, number>> = {
+    "src/cli": 94,
+    "src/core": 99,
+    "src/server": 89,
+};
 
 /** Dev and test helpers in src/ that the package never ships. */
 const HELPERS = new Set(["src/cli/testing.ts", "src/core/testing.ts", "src/server/dev-open.ts"]);
@@ -33,6 +45,13 @@ export interface Tally {
 export interface Summary {
     rows: Tally[];
     total: Tally;
+}
+
+export interface Breach {
+    name: string;
+    floor: number;
+    /** Undefined when the directory has no coverage data at all. */
+    coverage: number | undefined;
 }
 
 export function parseLcov(text: string): FileCoverage[] {
@@ -82,6 +101,23 @@ export function summarize(files: FileCoverage[]): Summary {
     return { rows, total };
 }
 
+/** Floored directories under their floor; a floored directory missing from the report breaches. */
+export function breaches(summary: Summary, floors: Readonly<Record<string, number>>): Breach[] {
+    const result: Breach[] = [];
+    for (const [name, floor] of Object.entries(floors)) {
+        const row = summary.rows.find((row) => row.name === name);
+        const coverage = row && row.found > 0 ? percent(row) : undefined;
+        if (coverage === undefined || coverage < floor) result.push({ name, floor, coverage });
+    }
+    return result;
+}
+
+function describeBreach(breach: Breach): string {
+    return breach.coverage === undefined
+        ? `${breach.name} has no coverage data`
+        : `${breach.name} is at ${breach.coverage.toFixed(2)}%, under its ${breach.floor}% floor`;
+}
+
 function cells(tally: Tally): string[] {
     return [
         tally.name,
@@ -91,7 +127,17 @@ function cells(tally: Tally): string[] {
     ];
 }
 
-export function markdown(counts: TestCounts | undefined, summary: Summary, floor: number): string {
+function floorCell(name: string, floors: Readonly<Record<string, number>>): string {
+    if (name === "total") return "";
+    const floor = floors[name];
+    return floor === undefined ? "none" : `${floor}%`;
+}
+
+export function markdown(
+    counts: TestCounts | undefined,
+    summary: Summary,
+    floors: Readonly<Record<string, number>>,
+): string {
     const lines = ["### Tests", ""];
     if (counts) {
         const passed = counts.tests - counts.failures - counts.skipped;
@@ -106,13 +152,25 @@ export function markdown(counts: TestCounts | undefined, summary: Summary, floor
         lines.push("No coverage data was written.");
         return `${lines.join("\n")}\n`;
     }
-    lines.push("| Directory | Files | Lines hit | Coverage |", "| --- | ---: | ---: | ---: |");
-    for (const row of [...summary.rows, summary.total]) lines.push(`| ${cells(row).join(" | ")} |`);
-    const verdict = percent(summary.total) >= floor ? "passes" : "fails";
+    lines.push(
+        "| Directory | Files | Lines hit | Coverage | Floor |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    );
+    for (const row of [...summary.rows, summary.total]) {
+        lines.push(`| ${[...cells(row), floorCell(row.name, floors)].join(" | ")} |`);
+    }
+    const failed = breaches(summary, floors);
+    const verdict =
+        failed.length === 0
+            ? "Every directory with a floor passes it."
+            : `Coverage fails: ${failed.map(describeBreach).join("; ")}.`;
     lines.push(
         "",
-        `The total ${verdict} the ${floor}% floor. Bun counts lines and functions, not branches, and`,
-        "only in files a test loads; code that runs only inside a spawned daemon is not counted.",
+        verdict,
+        "",
+        "Bun counts lines and functions, not branches, and only in files a test loads; code that runs",
+        "only inside a spawned daemon is not counted. src/client has no floor: its tests load UI",
+        "modules whose render paths are covered by browser checks and e2e, not unit tests.",
     );
     return `${lines.join("\n")}\n`;
 }
@@ -153,21 +211,21 @@ async function main(): Promise<number> {
         const summary = summarize(parseLcov(read(join(scratch, "lcov.info"))));
         console.log(`\n${plain(counts, summary)}`);
         const stepSummary = process.env.GITHUB_STEP_SUMMARY;
-        if (stepSummary) appendFileSync(stepSummary, markdown(counts, summary, FLOOR));
+        if (stepSummary) appendFileSync(stepSummary, markdown(counts, summary, FLOORS));
 
         if (code !== 0) return code;
         if (summary.total.found === 0) {
             console.error("coverage: no lcov data for src/");
             return 1;
         }
-        const total = percent(summary.total);
-        if (total < FLOOR) {
-            console.error(
-                `coverage: ${total.toFixed(2)}% of src/ lines is below the ${FLOOR}% floor`,
-            );
-            return 1;
-        }
-        console.log(`coverage: ${total.toFixed(2)}%, floor ${FLOOR}%`);
+        const failed = breaches(summary, FLOORS);
+        for (const breach of failed) console.error(`coverage: ${describeBreach(breach)}`);
+        if (failed.length > 0) return 1;
+        const passed = Object.entries(FLOORS).map(([name, floor]) => {
+            const row = summary.rows.find((row) => row.name === name)!;
+            return `${name} ${percent(row).toFixed(2)}% (floor ${floor}%)`;
+        });
+        console.log(`coverage: ${passed.join(", ")}; src/client has no floor`);
         return 0;
     } finally {
         rmSync(scratch, { recursive: true, force: true });

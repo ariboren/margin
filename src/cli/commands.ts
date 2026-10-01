@@ -1,11 +1,21 @@
 // The agent's writes (reply, resolve, suggest) and `show`. Each write is one transaction: check
 // the thread, append, and answer with an ack of at most 24 B.
+import { signed } from "../core/agent.ts";
 import { createAnchor, resolveAnchor } from "../core/anchor.ts";
 import { applyEditIn, type ApplyResult } from "../core/apply.ts";
 import { unitChain } from "../core/context.ts";
 import { transact, type LogTxn } from "../core/log.ts";
-import type { Ack, AckError, Anchor, EventInput, ShowOutput, ThreadId } from "../core/model.ts";
-import { catchUpInputs, foldLog, nextThreadId } from "../core/threads.ts";
+import type {
+    Ack,
+    AckError,
+    AgentIdentity,
+    Anchor,
+    EventInput,
+    ShowOutput,
+    Thread,
+    ThreadId,
+} from "../core/model.ts";
+import { catchUpInputs, foldLog, nextThreadId, type DocState } from "../core/threads.ts";
 import { loadView, locate, readSource, type DocView } from "./doc.ts";
 
 function fail(error: AckError, id?: ThreadId, detail?: string): Ack {
@@ -15,6 +25,12 @@ function fail(error: AckError, id?: ThreadId, detail?: string): Ack {
         error,
         ...(detail ? { detail } : {}),
     };
+}
+
+/** The thread an agent command acts on, or the ack refusing it. */
+function lookup(state: DocState, id: ThreadId): Thread | Ack {
+    if (state.deleted.has(id)) return fail("deleted", id);
+    return state.threads.get(id) ?? fail("not-found", id);
 }
 
 /** The full unit; for a table cell, its row and the header row rather than the whole table. */
@@ -32,40 +48,53 @@ function unitText(view: DocView, start: number): string {
 
 export async function show(docPath: string, id: ThreadId): Promise<ShowOutput | Ack> {
     const view = await loadView(docPath);
-    const thread = view.state.threads.get(id);
-    if (!thread) return fail("not-found", id);
-    const { range, context } = locate(view, thread);
+    const thread = lookup(view.state, id);
+    if ("ok" in thread) return thread;
+    const { range, detached, context } = locate(view, thread);
     return {
         id,
         path: context.path,
         line: context.line,
         unit: range ? unitText(view, range.start) : "",
-        thread: { ...thread, detached: range === null },
+        thread: { ...thread, detached },
     };
+}
+
+export interface ReplyOptions {
+    resolve?: boolean;
+    agent?: AgentIdentity;
 }
 
 export async function reply(
     docPath: string,
     id: ThreadId,
     text: string,
-    resolve = false,
+    options: ReplyOptions = {},
 ): Promise<Ack> {
+    const resolve = options.resolve ?? false;
+    const by = { by: "agent" as const, ...signed(options.agent) };
     return await transact(docPath, (txn) => {
-        const thread = foldLog(txn.events).threads.get(id);
-        if (!thread) return fail("not-found", id);
+        const thread = lookup(foldLog(txn.events), id);
+        if ("ok" in thread) return thread;
         if (thread.state === "resolved") return fail("resolved", id);
-        const inputs: EventInput[] = [{ type: "reply", by: "agent", id, text }];
-        if (resolve) inputs.push({ type: "resolve", by: "agent", id });
+        const inputs: EventInput[] = [{ type: "reply", ...by, id, text }];
+        if (resolve) inputs.push({ type: "resolve", ...by, id });
         txn.append(inputs);
         return { ok: true, id, state: resolve ? "resolved" : "replied" };
     });
 }
 
-export async function resolveThread(docPath: string, id: ThreadId): Promise<Ack> {
+export async function resolveThread(
+    docPath: string,
+    id: ThreadId,
+    agent?: AgentIdentity,
+): Promise<Ack> {
     return await transact(docPath, (txn) => {
-        const thread = foldLog(txn.events).threads.get(id);
-        if (!thread) return fail("not-found", id);
-        if (thread.state !== "resolved") txn.append([{ type: "resolve", by: "agent", id }]);
+        const thread = lookup(foldLog(txn.events), id);
+        if ("ok" in thread) return thread;
+        if (thread.state !== "resolved") {
+            txn.append([{ type: "resolve", by: "agent", ...signed(agent), id }]);
+        }
         return { ok: true, id, state: "resolved" };
     });
 }
@@ -77,6 +106,7 @@ export interface SuggestInput {
     replace: string;
     note?: string;
     apply: boolean;
+    agent?: AgentIdentity;
 }
 
 function applyFailure(result: Extract<ApplyResult, { ok: false }>, id?: ThreadId): Ack {
@@ -85,35 +115,31 @@ function applyFailure(result: Extract<ApplyResult, { ok: false }>, id?: ThreadId
 }
 
 /**
- * Suggests by default. Applies through `applyEditIn` when `--apply` is given or auto-apply is on
- * for the thread or doc; "suggestions only" turns an asked-for apply into a suggestion and the
- * ack says so. Only the CLI applies suggestions; the server applies only the user's accept.
+ * Suggests by default. Applies through `applyEditIn` when `--apply` is given (the user's comment
+ * asked for the change) or the doc's auto-apply is on. Only the CLI applies suggestions; the
+ * server applies only the user's accept.
  */
 export async function suggest(docPath: string, input: SuggestInput): Promise<Ack> {
     return await transact(docPath, (txn) => {
         const state = foldLog(txn.events);
         const source = readSource(txn.sidecar.doc);
-        const thread = input.id === undefined ? undefined : state.threads.get(input.id);
-        if (input.id !== undefined) {
-            if (!thread) return fail("not-found", input.id);
-            if (thread.state === "resolved") return fail("resolved", input.id);
-        }
-        const settings = state.settings;
-        const wanted = input.apply || settings.autoApply || (thread?.autoApply ?? false);
-        const apply = wanted && !settings.suggestionsOnly;
-        const downgraded = input.apply && settings.suggestionsOnly;
+        const thread = input.id === undefined ? undefined : lookup(state, input.id);
+        if (thread && "ok" in thread) return thread;
+        if (thread?.state === "resolved") return fail("resolved", thread.id);
+        const apply = input.apply || state.settings.autoApply;
         const event = (id: ThreadId, anchor?: Anchor): EventInput => ({
             type: "suggest",
             by: "agent",
+            ...signed(input.agent),
             id,
             replace: input.replace,
             apply,
-            downgraded,
             ...(input.note ? { note: input.note } : {}),
             ...(anchor ? { anchor } : {}),
         });
 
         if (thread) {
+            if (!thread.anchor) return fail("no-anchor", thread.id);
             const range = source === null ? null : resolveAnchor(source, thread.anchor);
             if (!range) return fail("detached", thread.id);
             if (apply) {
@@ -123,11 +149,12 @@ export async function suggest(docPath: string, input: SuggestInput): Promise<Ack
                     range.start,
                     thread.anchor.exact,
                     input.replace,
+                    input.agent,
                 );
                 if (!result.ok) return applyFailure(result, thread.id);
             }
             txn.append([event(thread.id)]);
-            return { ok: true, id: thread.id, state: "replied", downgraded };
+            return { ok: true, id: thread.id, state: "replied" };
         }
 
         const find = input.find ?? "";
@@ -140,7 +167,7 @@ export async function suggest(docPath: string, input: SuggestInput): Promise<Ack
         const id = nextThreadId(txn.events);
         let anchor = createAnchor(source, { start, end: start + find.length });
         if (apply) {
-            const result = edit(txn, id, start, find, input.replace);
+            const result = edit(txn, id, start, find, input.replace, input.agent);
             if (!result.ok) return applyFailure(result, id);
             // The thread points at what the text says now.
             if (result.status === "changed" && result.event.after.length > 0) {
@@ -151,7 +178,7 @@ export async function suggest(docPath: string, input: SuggestInput): Promise<Ack
             }
         }
         txn.append([event(id, anchor)]);
-        return { ok: true, id, state: "replied", downgraded };
+        return { ok: true, id, state: "replied" };
     });
 }
 
@@ -161,6 +188,15 @@ function edit(
     start: number,
     before: string,
     after: string,
+    agent: AgentIdentity | undefined,
 ): ApplyResult {
-    return applyEditIn(txn, { start, before, after, cause: "apply", by: "agent", id });
+    return applyEditIn(txn, {
+        start,
+        before,
+        after,
+        cause: "apply",
+        by: "agent",
+        ...signed(agent),
+        id,
+    });
 }

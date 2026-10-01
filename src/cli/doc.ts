@@ -7,7 +7,7 @@ import { decodeSource, parseDoc } from "../core/blocks.ts";
 import { clipQuote, threadContext, type ThreadContext } from "../core/context.ts";
 import { readLog, sidecar } from "../core/log.ts";
 import type { Ack, Event, ParsedDoc, Range, Thread, ThreadId } from "../core/model.ts";
-import { foldLog, type DocState } from "../core/threads.ts";
+import { foldLog, withoutDeleted, type DocState } from "../core/threads.ts";
 import { isFile } from "../server/doc-location.ts";
 import type { Env } from "../server/open-tab.ts";
 import { recentDocs } from "./registry.ts";
@@ -29,11 +29,18 @@ export function readSource(path: string): string | null {
     }
 }
 
-/** Reads the doc and folds `events`. Inside a transaction, pass `txn.events`. */
+/**
+ * Reads the doc and folds `events`, deleted threads left out (`state.deleted` still names them).
+ * Inside a transaction, pass `txn.events`.
+ */
 export function viewOf(docPath: string, events: readonly Event[]): DocView {
     const path = sidecar(docPath).doc;
     const source = readSource(path);
-    return { path, doc: source === null ? null : parseDoc(source), state: foldLog(events) };
+    return {
+        path,
+        doc: source === null ? null : parseDoc(source),
+        state: withoutDeleted(foldLog(events)),
+    };
 }
 
 export async function loadView(docPath: string): Promise<DocView> {
@@ -43,18 +50,24 @@ export async function loadView(docPath: string): Promise<DocView> {
 export interface Located {
     /** Null when the quote is gone (detached) or the doc is missing. */
     range: Range | null;
+    /** The thread has a quote and it no longer resolves; never true for a doc note. */
+    detached: boolean;
     context: ThreadContext;
 }
 
+/** A doc note locates nowhere: `range` null, empty context, and it is never detached. */
 export function locate(view: DocView, thread: Thread): Located {
-    const range = view.doc ? resolveAnchor(view.doc.source, thread.anchor) : null;
-    if (view.doc && range) return { range, context: threadContext(view.doc, range) };
+    const range = view.doc && thread.anchor ? resolveAnchor(view.doc.source, thread.anchor) : null;
+    if (view.doc && range) {
+        return { range, detached: false, context: threadContext(view.doc, range) };
+    }
     return {
         range: null,
+        detached: thread.anchor !== undefined,
         context: {
             path: "",
             line: 0,
-            quote: clipQuote(thread.anchor.exact),
+            quote: thread.anchor ? clipQuote(thread.anchor.exact) : "",
             before: "",
             after: "",
         },

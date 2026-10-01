@@ -29,6 +29,8 @@ export interface Sandbox {
     text(): string;
     state(): Promise<DocState>;
     comment(exact: string, text: string, options?: { draft?: boolean }): Promise<ThreadId>;
+    /** A doc note: a comment with no anchor. */
+    note(text: string, options?: { draft?: boolean }): Promise<ThreadId>;
     append(...inputs: EventInput[]): Promise<void>;
     cli(argv: string[], options?: { stdin?: string; isTTY?: boolean }): Promise<CliResult>;
 }
@@ -64,6 +66,12 @@ export function sandbox(content = DOC): Sandbox {
                     text,
                     draft: options.draft ?? false,
                 },
+            ]);
+            return id;
+        },
+        async note(text, options = {}) {
+            const { id } = await createThread(doc, (next) => [
+                { type: "comment", by: "user", id: next, text, draft: options.draft ?? false },
             ]);
             return id;
         },

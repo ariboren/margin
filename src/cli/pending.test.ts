@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { applyEdit } from "../core/apply.ts";
-import type { PendingJson } from "../core/model.ts";
+import { readLog } from "../core/log.ts";
+import type { Event, PendingJson } from "../core/model.ts";
 import { pending, pendingWait } from "./pending.ts";
 import { sandbox, type Sandbox } from "./testing.ts";
+import { emitWatch } from "./watch.ts";
 
 let box: Sandbox;
 
@@ -18,6 +20,10 @@ async function read(): Promise<PendingJson> {
     let out = "";
     await pending(box.doc, { json: true, write: (text) => (out += text) });
     return JSON.parse(out) as PendingJson;
+}
+
+async function events(): Promise<Event[]> {
+    return (await readLog(box.doc)).events;
 }
 
 async function readText(): Promise<string> {
@@ -69,7 +75,6 @@ describe("pending", () => {
                 id,
                 replace: "slow path",
                 apply: false,
-                downgraded: false,
             },
             { type: "reject", by: "user", id, note: "Shorter." },
         );
@@ -89,7 +94,6 @@ describe("pending", () => {
                 replace: "x",
                 note: "Tried x.",
                 apply: false,
-                downgraded: false,
             },
             { type: "reply", by: "user", id, text: "Not x." },
         );
@@ -125,6 +129,62 @@ describe("pending", () => {
         expect((await read()).edits).toEqual([]);
     });
 
+    test("an undo folds with the edit it inverts unless the agent already read it", async () => {
+        const start = box.text().indexOf("rarely runs");
+        const undo = async (of: number, before: string, after: string) => {
+            const result = await applyEdit(box.doc, {
+                start,
+                before,
+                after,
+                cause: "undo",
+                by: "user",
+                of,
+            });
+            expect(result.ok).toBe(true);
+            return result.ok && result.status === "changed" ? result.event.seq : 0;
+        };
+        await userEdit("rarely runs", "never runs");
+        const edited = (await events()).at(-1)!.seq;
+        const undone = await undo(edited, "never runs", "rarely runs");
+        expect((await read()).edits).toEqual([]);
+        await undo(undone, "rarely runs", "never runs");
+        const [redone] = (await read()).edits;
+        expect(redone?.hunks).toEqual(["…so the cold path [-rarely-]{+never+} runs."]);
+        expect((await read()).edits).toEqual([]);
+
+        // The agent has read the redo; undoing it again is a change it must see.
+        const seq = (await events()).at(-1)!.seq;
+        await undo(seq, "never runs", "rarely runs");
+        const [shown] = (await read()).edits;
+        expect(shown?.hunks).toEqual(["…so the cold path [-never-]{+rarely+} runs."]);
+        expect((await read()).edits).toEqual([]);
+    });
+
+    test("an undo and its redo after the agent read the edit show nothing", async () => {
+        await userEdit("rarely runs", "never runs");
+        expect((await read()).edits).toHaveLength(1);
+        const start = box.text().indexOf("never runs");
+        const edited = (await events()).at(-1)!.seq;
+        await applyEdit(box.doc, {
+            start,
+            before: "never runs",
+            after: "rarely runs",
+            cause: "undo",
+            by: "user",
+            of: edited,
+        });
+        const undone = (await events()).at(-1)!.seq;
+        await applyEdit(box.doc, {
+            start,
+            before: "rarely runs",
+            after: "never runs",
+            cause: "undo",
+            by: "user",
+            of: undone,
+        });
+        expect((await read()).edits).toEqual([]);
+    });
+
     test("agent edits do not ride along", async () => {
         const id = await box.comment("cold path", "Fix");
         const start = box.text().indexOf("cold path");
@@ -153,6 +213,32 @@ describe("pending", () => {
         const [thread] = (await read()).threads;
         expect(thread!.detached).toBe(true);
         expect(thread!.quote).toBe("cold path");
+    });
+});
+
+describe("doc notes", () => {
+    test("print as `cN open doc` with no clip line, and are claimed", async () => {
+        await box.note("Tighten the whole intro.");
+        expect(await readText()).toBe("c1 open doc\n  user: Tighten the whole intro.\n");
+        const thread = (await box.state()).threads.get("c1")!;
+        expect(thread.claimed).toBe(true);
+        expect(thread.state).toBe("working");
+    });
+
+    test("the JSON marks them and never calls them detached", async () => {
+        await box.note("Overall?");
+        await box.comment("cold path", "Why?");
+        const [note, anchored] = (await read()).threads;
+        expect(note).toMatchObject({ id: "c1", doc: true, detached: false, path: "", line: 0 });
+        expect(note!.quote).toBe("");
+        expect(anchored).not.toHaveProperty("doc");
+    });
+
+    test("a held doc note waits for send all", async () => {
+        await box.note("Later", { draft: true });
+        expect(await readText()).toBe("none\n");
+        await box.append({ type: "send", by: "user", ids: ["c1"] });
+        expect((await read()).threads.map((thread) => thread.id)).toEqual(["c1"]);
     });
 });
 
@@ -191,5 +277,20 @@ describe("pending --wait", () => {
         stop.abort();
         expect(await waiting).toBe(false);
         expect(out).toBe("");
+    });
+});
+
+describe("deleted threads", () => {
+    test("are neither pending nor in a watch batch, and come back on undelete", async () => {
+        await box.comment("cold path", "Why?");
+        const id = await box.comment("Retry queue", "Which queue?");
+        await box.append({ type: "delete", by: "user", id });
+        let line = "";
+        await emitWatch(box.doc, (text) => (line += text));
+        expect(line).toBe('new c1 "Findings"\n');
+        expect((await read()).threads.map((thread) => thread.id)).toEqual(["c1"]);
+
+        await box.append({ type: "undelete", by: "user", id });
+        expect((await read()).threads.map((thread) => thread.id)).toEqual(["c1", id]);
     });
 });

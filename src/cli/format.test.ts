@@ -12,7 +12,6 @@ describe("acks", () => {
         const acks: Ack[] = [
             { ok: true, id: "c1000", state: "replied" },
             { ok: true, id: "c1000", state: "resolved" },
-            { ok: true, id: "c1000", state: "replied", downgraded: true },
         ];
         for (const ack of acks) expect(byteLength(formatAck(ack))).toBeLessThanOrEqual(ACK_CEILING);
     });
@@ -26,6 +25,8 @@ describe("acks", () => {
             "not-unique",
             "bad-args",
             "locked",
+            "deleted",
+            "no-anchor",
         ];
         for (const error of errors) {
             expect(byteLength(formatAck({ ok: false, id: "c1000", error }))).toBeLessThanOrEqual(
@@ -34,13 +35,8 @@ describe("acks", () => {
         }
     });
 
-    test("downgraded takes the state's place", () => {
-        expect(formatAck({ ok: true, id: "c3", state: "replied", downgraded: true })).toBe(
-            "ok c3 downgraded",
-        );
-        expect(formatAck({ ok: true, id: "c3", state: "replied", downgraded: false })).toBe(
-            "ok c3 replied",
-        );
+    test("a success names the state", () => {
+        expect(formatAck({ ok: true, id: "c3", state: "replied" })).toBe("ok c3 replied");
     });
 
     test("errors carry their detail after a semicolon", () => {
@@ -63,6 +59,40 @@ describe("watch line", () => {
             }),
         ).toBe('new c1 c2 "A \\"quoted\\" > B" | reply c3 | rejected c5 "C"');
     });
+
+    test("a doc-note group says doc in the path's place", () => {
+        expect(
+            formatWatch({
+                form: "compact",
+                groups: [
+                    { reason: "new", ids: ["c9"], doc: true },
+                    { reason: "reply", ids: ["c3"], path: "C" },
+                ],
+            }),
+        ).toBe('new c9 doc | reply c3 "C"');
+    });
+});
+
+test("a doc note in pending is its header and messages only", () => {
+    expect(
+        formatPending({
+            threads: [
+                {
+                    id: "c2",
+                    state: "open",
+                    doc: true,
+                    path: "",
+                    line: 0,
+                    detached: false,
+                    quote: "",
+                    before: "",
+                    after: "",
+                    messages: [{ by: "user", text: "Overall?" }],
+                },
+            ],
+            edits: [],
+        }),
+    ).toBe("c2 open doc\n  user: Overall?");
 });
 
 test("empty pending says none", () => {

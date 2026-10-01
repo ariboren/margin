@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createAnchor } from "../core/anchor.ts";
+import { readLog } from "../core/log.ts";
 import { createThread } from "../core/threads.ts";
+import { connectedAgents } from "../server/presence.ts";
 import { agentHelp, run, stripFinalNewline, type Io, type ServerCommands } from "./main.ts";
 import { DOC, sandbox, type Sandbox } from "./testing.ts";
 
@@ -81,10 +83,52 @@ describe("every contract command against a temp dir with no daemon", () => {
         expect(readFileSync(box.doc, "utf8")).toBe(DOC.replace("cold path", replacement));
     });
 
+    test("reply - takes markdown with backticks and $ from stdin", async () => {
+        await box.comment("cold path", "Why?");
+        margin(["pending", "doc.md"]);
+        const text = "- use `$HOME`\n- not $(pwd) or 'q' \"dq\"";
+        expect(margin(["reply", "c1", "-"], { stdin: `${text}\n` }).stdout).toBe("ok c1 replied\n");
+        expect((await box.state()).threads.get("c1")!.messages.at(-1)).toMatchObject({
+            by: "agent",
+            text,
+        });
+    });
+
     test("a doc path works before the id", async () => {
         await box.comment("cold path", "Why?");
         expect(margin(["reply", "doc.md", "c1", "Hi"]).stdout).toBe("ok c1 replied\n");
     });
+
+    test("--as, then MARGIN_AGENT, name the agent on what it writes and on its presence", async () => {
+        await box.comment("cold path", "Why?");
+        margin(["reply", "doc.md", "c1", "Hi", "--as", "foreman"], {
+            env: { MARGIN_AGENT: "reviewer" },
+        });
+        margin(["resolve", "doc.md", "c1"], { env: { MARGIN_AGENT: "reviewer", CLAUDECODE: "1" } });
+        margin(["pending", "doc.md"], { env: { MARGIN_AGENT: "", CLAUDECODE: "1" } });
+        const events = (await readLog(box.doc)).events;
+        expect(events.filter((event) => event.by === "agent").map((event) => event.agent)).toEqual([
+            expect.objectContaining({ name: "foreman" }),
+            { name: "reviewer", client: "claude-code" },
+            { name: "Claude Code", client: "claude-code" },
+        ]);
+        const watcher = Bun.spawn(["bun", MAIN, "watch", "doc.md", "--as", "foreman"], {
+            cwd: box.dir,
+            env: { ...process.env, ...box.env, CLAUDECODE: "1" },
+            stdout: "ignore",
+            stderr: "ignore",
+        });
+        try {
+            const deadline = Date.now() + 20_000;
+            while (connectedAgents(box.doc).length === 0 && Date.now() < deadline) {
+                await Bun.sleep(20);
+            }
+            expect(connectedAgents(box.doc)).toEqual([{ name: "foreman", client: "claude-code" }]);
+        } finally {
+            watcher.kill("SIGTERM");
+            await watcher.exited;
+        }
+    }, 30_000);
 
     test("MARGIN_DOC picks the doc", async () => {
         await box.comment("cold path", "Why?");
@@ -201,7 +245,7 @@ function io(isTTY = false): Io & { out: () => string } {
 describe("margin <doc>", () => {
     const server: ServerCommands = {
         async open(_path, target) {
-            target.write("http://127.0.0.1:1/d/x?t=token\n");
+            target.write("http://127.0.0.1:1/d/x/doc.md?t=token\n");
             return 0;
         },
         stop: async () => 0,
@@ -211,18 +255,21 @@ describe("margin <doc>", () => {
     test("prints agent-help after the URL when stdout is not a TTY", async () => {
         const target = io(false);
         expect(await run(["doc.md"], target, server)).toBe(0);
-        expect(target.out()).toBe(`http://127.0.0.1:1/d/x?t=token\n${agentHelp()}`);
+        expect(target.out()).toBe(`http://127.0.0.1:1/d/x/doc.md?t=token\n${agentHelp()}`);
     });
 
     test("prints only the URL on a terminal", async () => {
         const target = io(true);
         await run(["doc.md"], target, server);
-        expect(target.out()).toBe("http://127.0.0.1:1/d/x?t=token\n");
+        expect(target.out()).toBe("http://127.0.0.1:1/d/x/doc.md?t=token\n");
     });
 });
 
-test("agent-help stays within its ceiling", () => {
-    expect(new TextEncoder().encode(agentHelp()).length).toBeLessThanOrEqual(1400);
+test("agent-help stays within its ceiling in budget.json", () => {
+    const { agentHelp: ceiling } = JSON.parse(
+        readFileSync(join(import.meta.dir, "../../budget.json"), "utf8"),
+    ) as { agentHelp: number };
+    expect(new TextEncoder().encode(agentHelp()).length).toBeLessThanOrEqual(ceiling);
 });
 
 test("one trailing newline is stripped from stdin, no more", () => {

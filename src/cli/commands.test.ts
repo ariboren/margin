@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { readLog } from "../core/log.ts";
 import { applyEdit } from "../core/apply.ts";
 import { DocSession } from "../server/session.ts";
-import type { ShowOutput } from "../core/model.ts";
+import type { Ack, EventInput, ShowOutput } from "../core/model.ts";
 import { reply, resolveThread, show, suggest } from "./commands.ts";
 import { formatShow } from "./format.ts";
 import { DOC, sandbox, type Sandbox } from "./testing.ts";
@@ -22,7 +22,11 @@ describe("reply and resolve", () => {
     test("reply appends an agent message; --resolve also resolves", async () => {
         const id = await box.comment("cold path", "Why?");
         expect(await reply(box.doc, id, "Because")).toEqual({ ok: true, id, state: "replied" });
-        expect(await reply(box.doc, id, "Done", true)).toEqual({ ok: true, id, state: "resolved" });
+        expect(await reply(box.doc, id, "Done", { resolve: true })).toEqual({
+            ok: true,
+            id,
+            state: "resolved",
+        });
         const thread = (await box.state()).threads.get(id)!;
         expect(thread.state).toBe("resolved");
         expect(thread.messages.map((m) => [m.by, m.text])).toEqual([
@@ -59,7 +63,6 @@ describe("suggest", () => {
             ok: true,
             id,
             state: "replied",
-            downgraded: false,
         });
         expect(box.text()).toBe(DOC);
         expect((await box.state()).threads.get(id)!.suggestion).toMatchObject({
@@ -74,24 +77,31 @@ describe("suggest", () => {
         expect(box.text()).toBe(DOC.replace("cold path", "slow path"));
         const thread = (await box.state()).threads.get(id)!;
         expect(thread.applied).toMatchObject({ before: "cold path", after: "slow path" });
-        expect(thread.anchor.exact).toBe("slow path");
+        expect(thread.anchor!.exact).toBe("slow path");
         expect(thread.messages.at(-1)).toMatchObject({ by: "agent", text: "Renamed" });
     });
 
-    test("suggestions only downgrades --apply and says so", async () => {
+    test("the doc's auto-apply applies without --apply", async () => {
         const id = await box.comment("cold path", "Rename");
-        await box.append({ type: "setting", by: "user", key: "suggestionsOnly", value: true });
-        expect(await suggest(box.doc, { id, replace: "slow path", apply: true })).toMatchObject({
+        await box.append({ type: "setting", by: "user", key: "autoApply", value: true });
+        expect(await suggest(box.doc, { id, replace: "slow path", apply: false })).toEqual({
             ok: true,
-            downgraded: true,
+            id,
+            state: "replied",
         });
-        expect(box.text()).toBe(DOC);
+        expect(box.text()).toBe(DOC.replace("cold path", "slow path"));
     });
 
-    test("auto-apply on the thread applies without --apply", async () => {
+    test("an older log's suggestions only and per-thread auto-apply are ignored", async () => {
         const id = await box.comment("cold path", "Rename");
-        await box.append({ type: "setting", by: "user", key: "autoApply", value: true, id });
+        const legacy = [
+            { type: "setting", by: "user", key: "autoApply", value: true, id },
+            { type: "setting", by: "user", key: "suggestionsOnly", value: true },
+        ] as unknown as EventInput[];
+        await box.append(...legacy);
         await suggest(box.doc, { id, replace: "slow path", apply: false });
+        expect(box.text()).toBe(DOC);
+        await suggest(box.doc, { id, replace: "slow path", apply: true });
         expect(box.text()).toBe(DOC.replace("cold path", "slow path"));
     });
 
@@ -123,14 +133,14 @@ describe("suggest", () => {
         ).toMatchObject({ ok: true, id: "c1", state: "replied" });
         const thread = (await box.state()).threads.get("c1")!;
         expect(thread.createdBy).toBe("agent");
-        expect(thread.anchor.exact).toBe("first tile");
+        expect(thread.anchor!.exact).toBe("first tile");
     });
 
     test("--find --apply anchors the new thread on the text as it now reads", async () => {
         await suggest(box.doc, { find: "first tile", replace: "first image", apply: true });
         expect(box.text()).toContain("first image renders");
         const thread = (await box.state()).threads.get("c1")!;
-        expect(thread.anchor.exact).toBe("first image");
+        expect(thread.anchor!.exact).toBe("first image");
         expect(thread.applied).toMatchObject({ before: "first tile", after: "first image" });
     });
 
@@ -167,9 +177,9 @@ describe("suggest --find with a daemon yet to sync an editor save (gate B)", () 
             const source = box.text();
             const state = await box.state();
             const created = [...state.threads.values()].at(-1)!;
-            expect(created.anchor.hint).toBe(source.indexOf("Retry queue"));
+            expect(created.anchor!.hint).toBe(source.indexOf("Retry queue"));
             if (first) {
-                expect(state.threads.get(first)!.anchor.hint).toBe(source.indexOf("cold path"));
+                expect(state.threads.get(first)!.anchor!.hint).toBe(source.indexOf("cold path"));
             }
             const { events } = await readLog(box.doc);
             expect(events.some((event) => event.type === "outside" && event.edit)).toBe(false);
@@ -205,5 +215,68 @@ describe("show", () => {
 
     test("an unknown id is not found", async () => {
         expect(await show(box.doc, "c4")).toEqual({ ok: false, id: "c4", error: "not-found" });
+    });
+});
+
+describe("deleted threads", () => {
+    test("every agent command is refused, and nothing is appended", async () => {
+        const id = await box.comment("cold path", "Why?");
+        await box.append({ type: "delete", by: "user", id });
+        const version = (await box.state()).version;
+        const refused: Ack = { ok: false, id, error: "deleted" };
+        expect(await reply(box.doc, id, "Because")).toEqual(refused);
+        expect(await resolveThread(box.doc, id)).toEqual(refused);
+        expect(await suggest(box.doc, { id, replace: "slow path", apply: true })).toEqual(refused);
+        expect(await show(box.doc, id)).toEqual(refused);
+        expect((await box.state()).version).toBe(version);
+        expect(box.text()).toBe(DOC);
+    });
+
+    test("after an undelete the agent can answer again", async () => {
+        const id = await box.comment("cold path", "Why?");
+        await box.append({ type: "delete", by: "user", id }, { type: "undelete", by: "user", id });
+        expect(await reply(box.doc, id, "Because")).toEqual({ ok: true, id, state: "replied" });
+    });
+
+    test("a reply racing the page's delete lands only if it takes the lock first", async () => {
+        const first = await box.comment("cold path", "Why?");
+        const second = await box.comment("Retry queue", "Why?");
+        const session = await DocSession.open("0123456789ab", box.doc);
+        expect(await reply(box.doc, first, "Because")).toMatchObject({ ok: true });
+        await session.deleteThread(first);
+        await session.deleteThread(second);
+        expect(await reply(box.doc, second, "Late")).toMatchObject({ error: "deleted" });
+        const state = await box.state();
+        expect(state.threads.get(first)!.messages.map((m) => m.by)).toEqual(["user", "agent"]);
+        expect(state.threads.get(second)!.messages.map((m) => m.by)).toEqual(["user"]);
+        expect(session.snapshot().threads).toEqual([]);
+    });
+});
+
+describe("doc notes", () => {
+    test("reply and resolve work; suggest is refused with no-anchor and appends nothing", async () => {
+        const id = await box.note("Tighten the whole intro.");
+        expect(await reply(box.doc, id, "On it.")).toEqual({ ok: true, id, state: "replied" });
+        const version = (await box.state()).version;
+        expect(await suggest(box.doc, { id, replace: "x", apply: true })).toEqual({
+            ok: false,
+            id,
+            error: "no-anchor",
+        });
+        expect((await box.state()).version).toBe(version);
+        expect(box.text()).toBe(DOC);
+        expect(await resolveThread(box.doc, id)).toEqual({ ok: true, id, state: "resolved" });
+    });
+
+    test("show prints the thread with no quote and no unit", async () => {
+        const id = await box.note("Tighten the whole intro.");
+        await reply(box.doc, id, "On it.");
+        const result = (await show(box.doc, id)) as ShowOutput;
+        expect(result).toMatchObject({ id, path: "", line: 0, unit: "" });
+        expect(result.thread.detached).toBe(false);
+        expect(result.thread.anchor).toBeUndefined();
+        expect(formatShow(result)).toBe(
+            ["c1 replied doc", "user: Tighten the whole intro.", "agent: On it."].join("\n"),
+        );
     });
 });

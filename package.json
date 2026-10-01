@@ -45,6 +45,7 @@
         "typecheck": "tsc --noEmit",
         "test": "bun test",
         "build": "bun scripts/build.ts",
+        "dev": "bun scripts/dev.ts",
         "mockup": "bun mockup/build.ts",
         "budget": "bun scripts/budget.ts",
         "budget:private": "bun scripts/budget.ts --sample private",

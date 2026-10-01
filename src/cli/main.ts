@@ -11,6 +11,7 @@ import type { Env } from "../server/open-tab.ts";
 import { reply, resolveThread, show, suggest } from "./commands.ts";
 import { isThreadId, resolveDoc, type DocTarget } from "./doc.ts";
 import { formatAck, formatShow } from "./format.ts";
+import { resolveAgent } from "./identity.ts";
 import { pending, pendingWait } from "./pending.ts";
 import { recordDoc } from "./registry.ts";
 import { setup } from "./setup.ts";
@@ -45,6 +46,7 @@ const options = {
     message: { type: "string", short: "m" },
     user: { type: "boolean" },
     force: { type: "boolean" },
+    as: { type: "string" },
 } as const;
 
 export function agentHelp(): string {
@@ -106,16 +108,22 @@ export async function run(argv: string[], io: Io, server?: ServerCommands): Prom
                 const target = await resolveDoc({ explicit: rest[0], cwd: io.cwd, env: io.env });
                 if (!target.ok) return docFailure(io, target);
                 await recordDoc(target.path, io.env);
+                const agent = resolveAgent({ as: values.as, env: io.env });
                 if (command === "watch") {
-                    await watch(target.path, write, { ...waitOptions(io), once: values.once });
+                    await watch(target.path, write, {
+                        ...waitOptions(io),
+                        once: values.once,
+                        agent,
+                    });
                 } else if (values.wait) {
                     await pendingWait(target.path, {
                         ...waitOptions(io),
                         json: values.json,
                         write,
+                        agent,
                     });
                 } else {
-                    await pending(target.path, { json: values.json, write });
+                    await pending(target.path, { json: values.json, write, agent });
                 }
                 return 0;
             }
@@ -158,6 +166,7 @@ async function threadCommand(
     const target = await resolveDoc({ explicit, ...(id ? { id } : {}), cwd: io.cwd, env: io.env });
     if (!target.ok) return docFailure(io, target);
     const doc = target.path;
+    const agent = resolveAgent({ as: values.as, env: io.env });
 
     switch (command) {
         case "show": {
@@ -167,12 +176,12 @@ async function threadCommand(
             return 0;
         }
         case "reply": {
-            const text = rest[0];
+            const text = rest[0] === "-" ? stripFinalNewline(await io.stdin()) : rest[0];
             if (!text) return badArgs(io, "reply text missing");
-            return ack(io, await reply(doc, id!, text, values.resolve));
+            return ack(io, await reply(doc, id!, text, { resolve: values.resolve, agent }));
         }
         case "resolve":
-            return ack(io, await resolveThread(doc, id!));
+            return ack(io, await resolveThread(doc, id!, agent));
         case "suggest": {
             if (values.replace === undefined) return badArgs(io, "--replace missing");
             const replace =
@@ -184,6 +193,7 @@ async function threadCommand(
                     replace,
                     ...(values.message ? { note: values.message } : {}),
                     apply: values.apply ?? false,
+                    agent,
                 }),
             );
         }

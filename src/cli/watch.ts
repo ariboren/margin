@@ -3,16 +3,23 @@
 // process, remembers what the agent has seen, so a re-armed or second watcher neither repeats
 // nor loses a batch.
 import { statSync } from "node:fs";
-import type { Event, ThreadId, WakeReason } from "../core/model.ts";
+import { UNKNOWN_AGENT, signed } from "../core/agent.ts";
+import {
+    isDocNote,
+    type AgentIdentity,
+    type Event,
+    type ThreadId,
+    type WakeReason,
+} from "../core/model.ts";
 import { LockTimeoutError } from "../core/lock.ts";
 import { readLog, sidecar, transact } from "../core/log.ts";
 import { withPresence } from "../server/presence.ts";
-import { applyEvent, emptyState, needsAgent } from "../core/threads.ts";
+import { applyEvent, emptyState, needsAgent, type DocState } from "../core/threads.ts";
 import { locate, viewOf, type DocView } from "./doc.ts";
 import { formatWatch, type CompactLine } from "./format.ts";
 
 /** Quiet time after the last wake before a batch is emitted. */
-export const DEBOUNCE_MS = 3_000;
+export const DEBOUNCE_MS = 200;
 /** A steady trickle of wakes still flushes this long after the first one in a batch. */
 export const MAX_WAIT_MS = 10_000;
 const POLL_MS = 150;
@@ -25,12 +32,24 @@ export interface WaitOptions {
     signal?: AbortSignal;
 }
 
-/** Only these wake the agent; accept, resolve, edits and the agent's own events never do. */
-export function wakeReason(event: Event): WakeReason | undefined {
+/**
+ * Only these wake the agent; accept, resolve, edits and the agent's own events never do. A
+ * retract wakes when it leaves its thread waiting on the agent in `state` (the fold at or after
+ * the event): a resolve taken back after a watch cursor passed the thread without printing it
+ * would otherwise strand it. It reads as new while the user's last message is the thread's first.
+ */
+export function wakeReason(event: Event, state: DocState): WakeReason | undefined {
     switch (event.type) {
+        case "retract": {
+            const thread = state.threads.get(event.id);
+            if (!thread || !needsAgent(thread)) return undefined;
+            const last = thread.messages.findLast((message) => message.by === "user");
+            return last && last !== thread.messages[0] ? "reply" : "new";
+        }
         case "comment":
             return event.by === "user" && !event.draft ? "new" : undefined;
         case "send":
+        case "undelete":
             return "new";
         case "suggest":
             return event.by === "user" && event.anchor ? "new" : undefined;
@@ -50,7 +69,8 @@ function wakeIds(event: Event): ThreadId[] {
 
 /**
  * The batch woken after `afterSeq`: each thread that still waits on the agent, grouped by the
- * reason it first woke, with the heading path when a group shares one. Undefined when none do.
+ * reason it first woke, with the heading path when a group shares one (`doc` when the group is
+ * all doc notes). Undefined when none do.
  */
 export function watchLine(
     view: DocView,
@@ -60,7 +80,7 @@ export function watchLine(
     const reasons = new Map<ThreadId, WakeReason>();
     for (const event of events) {
         if (event.seq <= afterSeq) continue;
-        const reason = wakeReason(event);
+        const reason = wakeReason(event, view.state);
         if (!reason) continue;
         for (const id of wakeIds(event)) if (!reasons.has(id)) reasons.set(id, reason);
     }
@@ -68,33 +88,51 @@ export function watchLine(
     for (const [id, reason] of reasons) {
         const thread = view.state.threads.get(id);
         if (!thread || !needsAgent(thread)) continue;
+        const doc = isDocNote(thread);
         const { path } = locate(view, thread).context;
         const group = groups.find((candidate) => candidate.reason === reason);
         if (!group) {
-            groups.push({ reason, ids: [id], path });
+            groups.push({ reason, ids: [id], ...(doc ? { doc: true as const } : { path }) });
             continue;
         }
         group.ids.push(id);
         if (group.path !== path) delete group.path;
+        if (!doc) delete group.doc;
     }
     return groups.length > 0 ? { form: "compact", groups } : undefined;
 }
 
-function hasWakeAfter(events: readonly Event[], seq: number): boolean {
-    return events.some((event) => event.seq > seq && wakeReason(event) !== undefined);
+function hasWakeAfter(events: readonly Event[], state: DocState, seq: number): boolean {
+    return events.some((event) => event.seq > seq && wakeReason(event, state) !== undefined);
 }
 
 /**
  * Emits the batch past the watch cursor, if any, under the lock: moves the cursor, then prints
  * one compact line. It claims nothing; `pending` does. Returns whether anything was printed.
+ * The cursor moves even when nothing prints (a wake whose thread no longer waits), or the batch
+ * would be reconsidered forever; it names the threads it printed so a retract can tell the two
+ * apart.
  */
-export async function emitWatch(docPath: string, write: (text: string) => void): Promise<boolean> {
+export async function emitWatch(
+    docPath: string,
+    write: (text: string) => void,
+    agent?: AgentIdentity,
+): Promise<boolean> {
     return await transact(docPath, (txn) => {
         const view = viewOf(docPath, txn.events);
         const cursor = view.state.cursors.watch;
-        if (!hasWakeAfter(txn.events, cursor)) return false;
+        if (!hasWakeAfter(txn.events, view.state, cursor)) return false;
         const line = watchLine(view, txn.events, cursor);
-        txn.append([{ type: "cursor", by: "agent", stream: "watch", upTo: view.state.version }]);
+        txn.append([
+            {
+                type: "cursor",
+                by: "agent",
+                ...signed(agent),
+                stream: "watch",
+                upTo: view.state.version,
+                ids: line?.groups.flatMap((group) => group.ids) ?? [],
+            },
+        ]);
         if (!line) return false;
         write(`${formatWatch(line)}\n`);
         return true;
@@ -142,15 +180,18 @@ export class WakeTail {
         while (!signal?.aborted) {
             if (!this.started || fileSize(log) !== this.offset) await this.read();
             const now = Date.now();
+            let wait = POLL_MS;
             if (this.lastWakeSeq <= this.state.cursors[this.stream]) {
                 this.first = this.last = undefined;
             } else if (this.first !== undefined && this.last !== undefined) {
-                if (now - this.last >= debounce || now - this.first >= maxWait) {
+                const due = Math.min(this.last + debounce, this.first + maxWait);
+                if (now >= due) {
                     this.first = this.last = undefined;
                     return true;
                 }
+                wait = Math.min(POLL_MS, due - now);
             }
-            await sleep(POLL_MS, signal);
+            await sleep(wait, signal);
         }
         return false;
     }
@@ -161,7 +202,7 @@ export class WakeTail {
         const now = Date.now();
         for (const event of events) {
             applyEvent(this.state, event);
-            if (wakeReason(event) === undefined) continue;
+            if (wakeReason(event, this.state) === undefined) continue;
             this.lastWakeSeq = event.seq;
             // A backlog has already waited long enough.
             this.first ??= this.started ? now : -Infinity;
@@ -184,10 +225,11 @@ async function emitRetrying(
     docPath: string,
     write: (text: string) => void,
     signal?: AbortSignal,
+    agent?: AgentIdentity,
 ): Promise<boolean> {
     while (!signal?.aborted) {
         try {
-            return await emitWatch(docPath, write);
+            return await emitWatch(docPath, write, agent);
         } catch (error) {
             if (!(error instanceof LockTimeoutError)) throw error;
         }
@@ -202,12 +244,13 @@ async function emitRetrying(
 export async function watch(
     docPath: string,
     write: (text: string) => void,
-    options: WaitOptions & { once?: boolean } = {},
+    options: WaitOptions & { once?: boolean; agent?: AgentIdentity } = {},
 ): Promise<void> {
-    await withPresence(docPath, async () => {
+    await withPresence(docPath, options.agent ?? UNKNOWN_AGENT, async () => {
         const tail = new WakeTail(docPath, "watch", options);
         while (await tail.next()) {
-            if ((await emitRetrying(docPath, write, options.signal)) && options.once) return;
+            if ((await emitRetrying(docPath, write, options.signal, options.agent)) && options.once)
+                return;
         }
     });
 }
