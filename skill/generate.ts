@@ -23,7 +23,7 @@ const opening =
     "Open a doc for the user with `margin <doc>`, once. The first line it prints is the page URL and the rest is the help below, so read it with `head -1`. Run again while the tab is open, it prints the same URL and opens no second tab.";
 
 const silence =
-    "After you answer a thread, end your turn with no chat message, not even a one-line summary. The user reads your replies in the page, so a chat echo repeats the doc and interrupts them. Write in chat only when they asked for updates there, or when something needs them that the doc cannot carry.";
+    "End every margin turn with no chat message, not even a one-line summary. That covers answering a thread, a watch expiring, re-arming it, and letting one lapse. The user reads your replies in the page, so a chat echo repeats the doc and interrupts them, and a note that a watch expired gives them nothing to act on. Write in chat only when they asked for updates there, for a critical alert, or at a handoff point. A critical alert: comments cannot reach you (the watch or the daemon is broken), an answer failed, or something needs the user that the doc cannot carry. A handoff point: the user approved, declined or asked you to finish the doc and that changes what you do next, or work the doc set in motion is done.";
 
 const naming =
     "The page names you after your session, the title in your tab, so leave `--as` and `MARGIN_AGENT` off unless the user asks for another name.";

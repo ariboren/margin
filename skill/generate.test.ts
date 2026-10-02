@@ -22,6 +22,16 @@ describe("skill and AGENTS.md snippet", () => {
         expect(render("x\n").skill).toMatch(/^---\nname: margin\ndescription: .+\n---\n/);
     });
 
+    test("the chat rule sits above the fenced help, with both exceptions", () => {
+        for (const text of Object.values(render("x\n"))) {
+            const preamble = text.slice(0, text.indexOf("```text"));
+            expect(preamble).toContain("End every margin turn with no chat message");
+            expect(preamble).toContain("a watch expiring, re-arming it, and letting one lapse");
+            expect(preamble).toContain("A critical alert:");
+            expect(preamble).toContain("A handoff point:");
+        }
+    });
+
     test("a changed source shows as drift", () => {
         expect(drifted(`${readHelp()}extra line\n`)).toEqual(["skill", "snippet"]);
     });

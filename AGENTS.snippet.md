@@ -4,21 +4,21 @@ Generated from `margin agent-help` by `bun run skill`; edit src/cli/agent-help.m
 
 Open a doc for the user with `margin <doc>`, once. The first line it prints is the page URL and the rest is the help below, so read it with `head -1`. Run again while the tab is open, it prints the same URL and opens no second tab.
 
-After you answer a thread, end your turn with no chat message, not even a one-line summary. The user reads your replies in the page, so a chat echo repeats the doc and interrupts them. Write in chat only when they asked for updates there, or when something needs them that the doc cannot carry.
+End every margin turn with no chat message, not even a one-line summary. That covers answering a thread, a watch expiring, re-arming it, and letting one lapse. The user reads your replies in the page, so a chat echo repeats the doc and interrupts them, and a note that a watch expired gives them nothing to act on. Write in chat only when they asked for updates there, for a critical alert, or at a handoff point. A critical alert: comments cannot reach you (the watch or the daemon is broken), an answer failed, or something needs the user that the doc cannot carry. A handoff point: the user approved, declined or asked you to finish the doc and that changes what you do next, or work the doc set in motion is done.
 
 The page names you after your session, the title in your tab, so leave `--as` and `MARGIN_AGENT` off unless the user asks for another name.
 
 ```text
 margin: review threads on a markdown doc. Use only these commands.
 
-Monitor `margin watch <doc>` (max timeout; re-arm on expiry, nothing lost). One line per batch:
+Monitor `margin watch <doc>` (max timeout; re-arm silently on expiry, nothing lost). One line per batch:
   new c7 c8 "2. Findings" | reply c3 | rejected c5
 One shell call: margin pending <doc>; margin show c7 (if clipped); one more with every answer (; not &&).
 No Monitor: margin pending <doc> --wait blocks until a batch; rerun.
-Answer in the doc, then end the turn silently; chat only if asked for updates. Markdown is fine (bullets, `code`).
+Answer in the doc (Markdown ok: bullets, `code`). End every margin turn silently; chat only if asked, or something the doc cannot carry needs the user.
 Before a big rewrite, answer or resolve threads it covers, or they detach.
 Doc status (watch; pending line 1):
-  finish c3 c5: settle each, ask nothing, stop: suggest --apply + resolve, or reply --resolve; show <id> for context
+  finish c3 c5: settle each, ask nothing, stop: suggest --apply + resolve, or reply --resolve
   approved: do what the doc says; approved changed: edited since; declined: stop until reopened
 
 margin pending <doc>  waiting threads (now working) + user edits (edit L13 path [-old-]{+new+})
@@ -30,7 +30,7 @@ margin suggest <id> --replace "text" [-m "note"]  proposes a new [[quote]]; the 
 margin suggest --find "exact" --replace "text" -m "why"  thread on text you change unasked
 margin resolve <id>
 
-reply <id> - and --replace - read stdin (last newline dropped); <<'EOF' for backticks or $.
+reply <id> - and --replace - read stdin; <<'EOF' for backticks or $.
 Text starting with -: --replace=- or -- before it.
 Acks: ok c3 replied|resolved;
 err c3 <reason>[; detail]: not-found|resolved|deleted|detached|no-anchor|not-unique|before-missing|locked.

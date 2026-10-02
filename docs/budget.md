@@ -6,8 +6,10 @@ Bytes of real CLI stdout, from `bun run budget` (public sample) and `bun run bud
 with the no-chat rule, the `--as` naming line (ceiling raised 1,450 → 1,500 B, owner, 2026-09-30),
 the named `resolved`, `deleted` and `locked` errors, and then the doc status lines (ceiling raised
 1,500 → 1,700 B, owner, 2026-10-01); to fit, the `--as` line left the help text for the skill
-preamble and the README. `watch` is the widest line printed: `declined | new c1 … c10`, a decline
-beside ten new threads; an ordinary batch is 20 B.
+preamble and the README. The rule that every margin turn ends silently, a watch re-arm included,
+was added at no byte cost: `; show <id> for context` on the finish line and
+`(last newline dropped)` on the stdin line paid for it. `watch` is the widest line printed:
+`declined | new c1 … c10`, a decline beside ten new threads; an ordinary batch is 20 B.
 
 | Operation                                    | Ceiling (B) | Public (B) | Private (B) |
 | -------------------------------------------- | ----------: | ---------: | ----------: |
