@@ -25,10 +25,21 @@ describe("skill and AGENTS.md snippet", () => {
     test("the chat rule sits above the fenced help, with both exceptions", () => {
         for (const text of Object.values(render("x\n"))) {
             const preamble = text.slice(0, text.indexOf("```text"));
-            expect(preamble).toContain("End every margin turn with no chat message");
+            expect(preamble).toContain("Never end a margin turn with an empty reply");
+            expect(preamble).toContain('"Margin watcher re-armed."');
+            expect(preamble).toContain('"Answered in margin."');
             expect(preamble).toContain("a watch expiring, re-arming it, and letting one lapse");
+            expect(preamble).toContain("Write more in chat only when");
             expect(preamble).toContain("A critical alert:");
             expect(preamble).toContain("A handoff point:");
+        }
+    });
+
+    test("one watch for every doc is asked for above the fenced help", () => {
+        for (const text of Object.values(render("x\n"))) {
+            const preamble = text.slice(0, text.indexOf("```text"));
+            expect(preamble).toContain("Keep one `margin watch`, with no path");
+            expect(preamble).toContain("`MARGIN_SESSION`");
         }
     });
 

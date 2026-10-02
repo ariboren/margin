@@ -75,7 +75,7 @@ Tell the agent the doc is open in margin. Select a sentence, press `c`, type a q
 
 ## Connecting an agent
 
-The agent works through the `margin` CLI and nothing else. It never reads the sidecar and never rewrites the whole file. `margin agent-help` prints the complete instructions in 1,697 bytes; the Claude Code skill and the AGENTS.md snippet are generated from that text. They tell the agent to answer in the doc, as replies and suggestions, and to stay out of chat unless you've asked for updates there, something has gone wrong, or the review reaches a point that changes what it does next.
+The agent works through the `margin` CLI and nothing else. It never reads the sidecar and never rewrites the whole file. `margin agent-help` prints the complete instructions in 1,796 bytes; the Claude Code skill and the AGENTS.md snippet are generated from that text. They tell the agent to answer in the doc, as replies and suggestions, and to end each turn in chat with a few words such as "Answered in margin." and nothing more, unless you've asked for updates there, something has gone wrong, or the review reaches a point that changes what it does next.
 
 **Claude Code.** `margin setup` asks where to install the skill (this project, all your projects, or not at all) and asks before overwriting a skill that differs from this version's. Run it again after upgrading margin. `--user` and `--force` answer those questions up front, and when it isn't run from a terminal (by an agent or a script) it never asks: it installs in the current project and refuses to overwrite a changed skill without `--force`.
 
@@ -101,6 +101,16 @@ The chip is green while an agent is watching, amber when none is or a reply has 
 $ margin watch review.md
 new c1 "5. Recommendations"
 ```
+
+**One watch for every doc.** With no path, `margin watch` follows every doc the agent's session has opened, watched or read, and picks up the ones it opens later, so an agent with three docs open keeps one watch running instead of three. When it covers more than one doc, each line starts with the doc's path.
+
+```console
+$ margin watch
+plan.md: new c7 c8 "2. Findings" | reply c3
+notes/review.md: approved
+```
+
+The session is the one Claude Code or Codex gives the commands it runs. Any other agent can name its own by setting `MARGIN_SESSION` on every margin command; without a session, `margin watch` with no path watches the one doc opened from the current directory, as it always has. A subagent that runs under its own session id keeps its own list, so a doc it opens is not picked up by the parent's watch.
 
 `margin pending` returns only the threads that need an answer, each with its quote in `[[ ]]` inside the surrounding text, plus any edits you made since the agent's last read.
 
@@ -158,7 +168,7 @@ Output to the agent is kept small. Bytes of CLI stdout, measured by `bun run bud
 | `margin watch`, per batch (widest line)         | 46                       |
 | `margin pending`, per thread (median)           | 310                      |
 | `reply` / `suggest` / `resolve` acknowledgement | 16                       |
-| `margin agent-help`                             | 1,697                    |
+| `margin agent-help`                             | 1,796                    |
 | 10 threads, full loop, all CLI output           | 4,773 (6.7% of the file) |
 | 10 threads handed to the agent, finish pass     | 4,310                    |
 

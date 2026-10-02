@@ -1,10 +1,10 @@
 margin: review threads on a markdown doc. Use only these commands.
 
-Monitor `margin watch <doc>` (max timeout; re-arm silently on expiry, nothing lost). One line per batch:
+Monitor one `margin watch` for all docs (max timeout; re-arm on expiry, nothing lost). One line per batch, `<doc>: ` first if several:
   new c7 c8 "2. Findings" | reply c3 | rejected c5
 One shell call: margin pending <doc>; margin show c7 (if clipped); one more with every answer (; not &&).
 No Monitor: margin pending <doc> --wait blocks until a batch; rerun.
-Answer in the doc (Markdown ok: bullets, `code`). End every margin turn silently; chat only if asked, or something the doc cannot carry needs the user.
+Answer in the doc (Markdown ok: bullets, `code`). End every margin turn in 2-3 words, never empty ("Margin watcher re-armed.", "Answered in margin."); more only if asked, or something the doc cannot carry needs the user.
 Before a big rewrite, answer or resolve threads it covers, or they detach.
 Doc status (watch; pending line 1):
   finish c3 c5: settle each, ask nothing, stop: suggest --apply + resolve, or reply --resolve

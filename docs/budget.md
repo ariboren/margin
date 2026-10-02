@@ -8,8 +8,13 @@ the named `resolved`, `deleted` and `locked` errors, and then the doc status lin
 1,500 → 1,700 B, owner, 2026-10-01); to fit, the `--as` line left the help text for the skill
 preamble and the README. The rule that every margin turn ends silently, a watch re-arm included,
 was added at no byte cost: `; show <id> for context` on the finish line and
-`(last newline dropped)` on the stdin line paid for it. `watch` is the widest line printed:
-`declined | new c1 … c10`, a decline beside ten new threads; an ordinary batch is 20 B.
+`(last newline dropped)` on the stdin line paid for it. One watch for every doc the session opens
+and the rule that a margin turn ends with a two-or-three-word confirmation, never an empty reply
+(which the host renders as a blank bullet), then cost 99 B: the two example confirmations, the
+`<doc>: ` prefix and the no-path form (ceiling raised 1,700 → 1,800 B, owner, 2026-10-02). `watch`
+is the widest line printed: `declined | new c1 … c10`, a decline beside ten new threads; an
+ordinary batch is 20 B. It is measured on a watch naming one doc, which prints no prefix; a watch
+covering several docs adds `<doc>: `, the doc's path from the working directory, to each line.
 
 | Operation                                    | Ceiling (B) | Public (B) | Private (B) |
 | -------------------------------------------- | ----------: | ---------: | ----------: |
@@ -18,7 +23,7 @@ was added at no byte cost: `; show <id> for context` on the finish line and
 | `pending`, per thread, max                   |       1,300 |        664 |         674 |
 | `pending`, per user edit (base)              |         200 |        120 |         147 |
 | `reply` / `resolve` / `suggest` ack          |          24 |         16 |          16 |
-| `agent-help`                                 |       1,700 |      1,697 |       1,697 |
+| `agent-help`                                 |       1,800 |      1,796 |       1,796 |
 | 10 seeded threads, full loop, all CLI output |       8,000 |      4,773 |       4,996 |
 | 10 seeded threads handed over, finish pass   |       5,000 |      4,310 |       4,419 |
 
