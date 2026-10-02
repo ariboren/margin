@@ -489,7 +489,11 @@ function tabWithinConflict(event: KeyboardEvent): boolean {
 
 function changedByWhom(snapshot: DocSnapshot): string {
     const lastEdit = snapshot.edits[snapshot.edits.length - 1];
-    return snapshot.changedOnDisk ? "on disk" : lastEdit?.by === "agent" ? "by agent" : "elsewhere";
+    return snapshot.changedOnDisk
+        ? "on disk"
+        : lastEdit?.by === "agent"
+          ? "by the agent"
+          : "elsewhere";
 }
 
 /**

@@ -60,7 +60,7 @@ export function TopBar(props: TopBarProps): JSX.Element {
         </button>
     );
     const liveTip = snapshot.settings.hold
-        ? "Turn on so your agent receives your comments as you send them"
+        ? "Turn on so the agent receives your comments as you send them"
         : "Turn off to queue comments and send them as a batch when you're ready";
     return (
         <>

@@ -46,7 +46,7 @@ export function ReplacedCard({
                 pill={<span class="pill pill-edit">Kept your text</span>}
             />
             <blockquote class="replaced-text">{replacement.replaced || "(empty)"}</blockquote>
-            {open ? <p class="card-note">The agent's version, which your text replaced.</p> : null}
+            {open ? <p class="card-note">Agent's version, which your text replaced.</p> : null}
             {notice ? (
                 <p class="card-notice" role="alert">
                     {notice}

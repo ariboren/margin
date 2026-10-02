@@ -82,7 +82,7 @@ export function Composer({ store, target, hold, onSending, onDone }: ComposerPro
                 ref={suggesting ? undefined : first}
                 class="reply-input"
                 rows={suggesting ? 1 : 3}
-                placeholder={suggesting ? "Note (optional)" : "Comment for the agent…"}
+                placeholder={suggesting ? "Note (optional)" : "Comment for agent…"}
                 value={text}
                 onInput={(event) => setText(event.currentTarget.value)}
                 onKeyDown={keys}
@@ -144,13 +144,13 @@ export function EditCard({ store, edit, now }: EditCardProps): JSX.Element {
             <EditDiff diff={diff} open={open} />
             {open ? (
                 <>
-                    <p class="card-note">The agent gets this with your next comment or reply.</p>
+                    <p class="card-note">Agent will get this with your next comment or reply.</p>
                     {asking ? (
                         <div class="card-reply">
                             <textarea
                                 class="reply-input"
                                 rows={2}
-                                placeholder="Note for the agent…"
+                                placeholder="Note for agent…"
                                 value={text}
                                 onInput={(event) => setText(event.currentTarget.value)}
                                 onKeyDown={submitKeys(send, () => setAsking(false))}

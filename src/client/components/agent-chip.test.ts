@@ -59,7 +59,7 @@ describe("agentChipFor", () => {
         expect(model).toMatchObject({ kind: "disconnected", label: "foreman", extra: 0 });
         expect(chipTipLines(model)).toEqual([
             "foreman · Claude Code",
-            "Agent disconnected. Click to copy a message for your agent.",
+            "Agent disconnected. Click to copy a reconnect prompt.",
         ]);
     });
 
@@ -67,7 +67,7 @@ describe("agentChipFor", () => {
         const model = agentChipFor(initialPresence(reading([]), T0), [], T0);
         expect(model).toMatchObject({ kind: "none", label: "No agent", agents: [] });
         expect(chipTipLines(model)).toEqual([
-            "No agent connected. Click to copy a message for your agent.",
+            "No agent connected. Click to copy a connect prompt.",
         ]);
     });
 

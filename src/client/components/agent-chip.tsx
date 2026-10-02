@@ -86,10 +86,10 @@ export function chipTipLines(model: AgentChipModel): string[] {
             lines.push("Connecting. Waiting for this agent to start watching.");
             break;
         case "disconnected":
-            lines.push("Agent disconnected. Click to copy a message for your agent.");
+            lines.push("Agent disconnected. Click to copy a reconnect prompt.");
             break;
         case "none":
-            lines.push("No agent connected. Click to copy a message for your agent.");
+            lines.push("No agent connected. Click to copy a connect prompt.");
             break;
         case "offline":
             lines.push("Disconnected from margin · reconnecting");
@@ -178,7 +178,7 @@ export function AgentChip(props: AgentChipProps): JSX.Element {
                             return (
                                 <CopyMessage
                                     location={props.location}
-                                    label={`${chipStatusLine(model)}. Click to copy a message for your agent`}
+                                    label={`${chipStatusLine(model)}. Click to copy a prompt for the agent`}
                                 >
                                     {content}
                                 </CopyMessage>
@@ -305,7 +305,7 @@ function CopyMessage({
             <button
                 type="button"
                 class={copied ? "agent-chip-button chip-copied" : "agent-chip-button"}
-                aria-label={copied ? "Copied. Paste it to your agent" : label}
+                aria-label={copied ? "Copied. Paste it to the agent" : label}
                 aria-expanded={fallback ? true : undefined}
                 onClick={() => void copy()}
             >
@@ -349,7 +349,7 @@ function MessagePopover({
         <div
             class="popover chip-popover"
             role="dialog"
-            aria-label="Message for your agent"
+            aria-label="Prompt for the agent"
             ref={root}
             onKeyDown={(event) => {
                 if (event.key === "Escape") {
@@ -359,9 +359,7 @@ function MessagePopover({
                 }
             }}
         >
-            <p class="chip-popover-text">
-                Copying failed. Select this message and copy it for your agent:
-            </p>
+            <p class="chip-popover-text">Copying failed. Copy this prompt yourself:</p>
             <textarea
                 class="chip-popover-area"
                 readOnly

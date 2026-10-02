@@ -254,7 +254,7 @@ const statusLabels: Record<ThreadStatus, string> = {
 
 function Working({ stalled }: { stalled: boolean }): JSX.Element {
     return stalled ? (
-        <p class="working working-stalled">No reply from the agent for over 10 minutes.</p>
+        <p class="working working-stalled">Agent has not replied for over 10 minutes.</p>
     ) : (
         <p class="working">
             <Dots />
