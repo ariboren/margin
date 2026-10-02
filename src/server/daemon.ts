@@ -49,6 +49,7 @@ import {
     type OpenUrlResponse,
     type PageBoot,
     type RegisterResponse,
+    type StoredResponse,
     type WireError,
 } from "./protocol.ts";
 import {
@@ -447,12 +448,16 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
             return json(opened);
         }
         if (action === "stored" && request.method === "POST") {
-            const change = parseChange(await readJson(request));
-            if (!change || !stored) {
-                return error(change ? 404 : 400, change ? "not-found" : "bad-request");
+            const parsed = parseChange(await readJson(request));
+            if (!parsed || !stored) {
+                return error(parsed ? 404 : 400, parsed ? "not-found" : "bad-request");
             }
-            stored.apply(doc.session.docId, change);
-            return json({ ok: true });
+            await stored.apply(doc.session.docId, parsed.change);
+            const response: StoredResponse = {
+                ok: true,
+                ...(parsed.skipped.length > 0 ? { skipped: parsed.skipped } : {}),
+            };
+            return json(response);
         }
         if (action === "open-url" && request.method === "POST") {
             const body = await readJson(request);

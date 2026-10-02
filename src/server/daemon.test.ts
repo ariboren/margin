@@ -15,7 +15,14 @@ import { startServer, type MarginServer } from "./daemon.ts";
 import { withPresence } from "./presence.ts";
 
 const FOREMAN = { name: "foreman", client: "claude-code" } as const;
-import { BOOT_ELEMENT, DEVICE_KEYS, routes, type PageBoot, type WireSnapshot } from "./protocol.ts";
+import {
+    BOOT_ELEMENT,
+    DEVICE_KEYS,
+    STORED_VALUE_MAX,
+    routes,
+    type PageBoot,
+    type WireSnapshot,
+} from "./protocol.ts";
 
 const FIXTURES = join(import.meta.dir, "..", "..", "fixtures");
 
@@ -405,11 +412,39 @@ describe("what the page stores", () => {
                 )
             ).status,
         ).toBe(403);
-        for (const body of [{ set: { other: "x" } }, { set: { "margin:x": 1 } }, { delete: "x" }]) {
+        for (const body of [[], { set: [] }, { delete: "x" }, { delete: [1] }]) {
             expect((await store(storing, docId, body)).status).toBe(400);
         }
         expect((await store(storing, "ffffffffffff", { set })).status).toBe(404);
         expect((await bootOf(url)).stored?.["margin:reply:c9"]).toBeUndefined();
+    });
+
+    test("one entry off the rules is skipped by name and costs the rest nothing", async () => {
+        const { docId, url } = await storing.register(join(storeRoot, "b.md"));
+        await store(storing, docId, { set: { "margin:reply:c3": "to go" } });
+        const response = await store(storing, docId, {
+            set: {
+                [DEVICE_KEYS.view]: '{"density":"sm"}',
+                "margin:draft:big": "v".repeat(STORED_VALUE_MAX + 1),
+                other: "x",
+            },
+            delete: ["margin:reply:c3"],
+        });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ ok: true, skipped: ["margin:draft:big", "other"] });
+        expect((await bootOf(url)).stored).toEqual({ [DEVICE_KEYS.view]: '{"density":"sm"}' });
+    });
+
+    test("a store that cannot be read refuses the write as a failure, for the page to resend", async () => {
+        const unreadable = await startServer({ storePath: join(storeRoot, "state") });
+        try {
+            const { docId, url } = await unreadable.register(join(storeRoot, "a.md"));
+            const response = await store(unreadable, docId, { set: { "margin:x": "v" } });
+            expect(response.status).toBe(500);
+            expect((await bootOf(url)).stored).toEqual({});
+        } finally {
+            await unreadable.stop();
+        }
     });
 
     test("the values outlive the daemon: a new one on a new port serves them", async () => {

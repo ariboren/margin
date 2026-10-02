@@ -133,10 +133,21 @@ export interface PageBoot {
  */
 export const DEVICE_KEYS = { view: "margin:view", theme: "margin:theme" } as const;
 
+/** Lengths in UTF-16 units. The page never sends a key or value past them. */
+export const STORED_KEY_MAX = 1024;
+export const STORED_VALUE_MAX = 60 * 1024;
+/** Keys in one `StoredChange`, sets and deletes together. */
+export const STORED_CHANGE_MAX = 200;
+
 /** Per-key, so two tabs never overwrite each other's keys. A key in both is deleted. */
 export interface StoredChange {
     set?: Record<string, string>;
     delete?: string[];
+}
+
+/** `skipped`: keys off the rules, left as they were; every other key in the change applied. */
+export interface StoredResponse extends Ok {
+    skipped?: string[];
 }
 
 /** SSE event name for a `WireSnapshot` payload; the SSE `id` is its `version`. */

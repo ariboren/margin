@@ -1,33 +1,43 @@
 import {
     BOOT_ELEMENT,
+    STORED_CHANGE_MAX,
+    STORED_KEY_MAX,
+    STORED_VALUE_MAX,
     TOKEN_META,
     routes,
     type PageBoot,
     type StoredChange,
 } from "../server/protocol.ts";
 
-/** Resolves true once the daemon has the change or refused it for good, false to try it again. */
+/** Resolves true once the daemon has the change, false (or rejects) to have it sent again. */
 export type SendChange = (change: StoredChange) => Promise<boolean>;
 
 const SEND_DELAY_MS = 300;
+const RETRY_MS = 1_000;
+const RETRY_MAX_MS = 30_000;
+/** Failed sends in a row before the keys wait for the next write or the tab closing. */
+const RETRY_LIMIT = 8;
 /** Browsers refuse a keepalive request once the bodies in flight pass 64 KiB. */
 const KEEPALIVE_MAX_BYTES = 60_000;
 
 /**
  * The daemon's store, read from the values that came with the page so `recall` never waits.
  * Writes land in memory at once and go to the daemon a moment later, one request at a time so
- * two writes to a key arrive in order.
+ * two writes to a key arrive in order. A change the daemon did not take stays pending and is
+ * sent again, a little later each time.
  */
 export class DaemonStorage {
     private readonly values: Map<string, string>;
     private readonly pending = new Map<string, string | null>();
     private timer: ReturnType<typeof setTimeout> | undefined;
     private sending = false;
+    private failures = 0;
 
     constructor(
         stored: Record<string, string>,
         private readonly send: SendChange,
         private readonly delayMs = SEND_DELAY_MS,
+        private readonly retryMs = RETRY_MS,
     ) {
         this.values = new Map(Object.entries(stored));
     }
@@ -45,22 +55,33 @@ export class DaemonStorage {
         } else {
             this.values.set(key, value);
         }
+        // The daemon would refuse it, so it is never sent: it lasts as long as the tab, and the
+        // daemon keeps what it last had for the key (a shorter draft beats none).
+        if (key.length > STORED_KEY_MAX || (value?.length ?? 0) > STORED_VALUE_MAX) {
+            return;
+        }
         this.pending.set(key, value);
+        this.arm(this.delayMs);
+    }
+
+    private arm(ms: number): void {
         clearTimeout(this.timer);
-        this.timer = setTimeout(() => void this.flush(), this.delayMs);
+        this.timer = setTimeout(() => void this.flush(), ms);
     }
 
     /**
      * `closing`: the tab is going away, so what is pending goes now even past a request in
-     * flight. A change the daemon did not take stays pending and goes with the next one.
+     * flight.
      */
     async flush(closing = false): Promise<void> {
         clearTimeout(this.timer);
         if (this.pending.size === 0 || (this.sending && !closing)) {
             return;
         }
-        const batch = new Map(this.pending);
-        this.pending.clear();
+        const batch = new Map([...this.pending].slice(0, STORED_CHANGE_MAX));
+        for (const key of batch.keys()) {
+            this.pending.delete(key);
+        }
         const change: Required<StoredChange> = { set: {}, delete: [] };
         for (const [key, value] of batch) {
             if (value === null) {
@@ -83,8 +104,13 @@ export class DaemonStorage {
                     this.pending.set(key, value);
                 }
             }
+            this.failures += 1;
+            if (this.failures <= RETRY_LIMIT) {
+                this.arm(Math.min(this.retryMs * 2 ** (this.failures - 1), RETRY_MAX_MS));
+            }
             return;
         }
+        this.failures = 0;
         await this.flush();
     }
 }
@@ -99,8 +125,8 @@ export function httpSend(docId: string, token: string): SendChange {
             // So a write still in flight when the tab closes reaches the daemon.
             keepalive: new Blob([body]).size <= KEEPALIVE_MAX_BYTES,
         });
-        // A refusal will not change on a retry; only a daemon that failed gets the keys again.
-        return response.status < 500;
+        // Anything else leaves the keys pending: no answer here means the daemon has them.
+        return response.ok;
     };
 }
 
