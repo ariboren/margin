@@ -16,6 +16,7 @@ import { resolveAgent, sessionKey } from "./identity.ts";
 import { pending, pendingWait } from "./pending.ts";
 import { recordDoc, sessionDocs, touchSession } from "./registry.ts";
 import { setup } from "./setup.ts";
+import { staleNotice, update } from "./update.ts";
 import { isFile } from "../server/doc-location.ts";
 import { watch, watchSession } from "./watch.ts";
 
@@ -25,6 +26,8 @@ export interface Io {
     /** stdout is a terminal: `margin <doc>` skips agent-help. */
     isTTY: boolean;
     write(text: string): void;
+    /** stderr: a line that must reach an agent which reads only the first line of stdout. */
+    warn?(text: string): void;
     stdin(): Promise<string>;
     /** One line typed in answer to `question`; set only when a person is at the terminal. */
     ask?(question: string): Promise<string>;
@@ -50,6 +53,7 @@ const options = {
     message: { type: "string", short: "m" },
     user: { type: "boolean" },
     force: { type: "boolean" },
+    "skill-only": { type: "boolean" },
     as: { type: "string" },
     version: { type: "boolean", short: "v" },
 } as const;
@@ -126,6 +130,8 @@ export async function run(argv: string[], io: Io, server?: ServerCommands): Prom
                 return await server[command](io);
             case "setup":
                 return await setup(io, { user: values.user, force: values.force });
+            case "update":
+                return await update(io, { skillOnly: values["skill-only"] });
             case "watch":
             case "pending": {
                 const unnamed = command === "watch" && rest[0] === undefined && !io.env.MARGIN_DOC;
@@ -182,6 +188,7 @@ export async function run(argv: string[], io: Io, server?: ServerCommands): Prom
                 if (!server) return badArgs(io, "no daemon support");
                 const code = await server.open(command, io);
                 if (code === 0 && !io.isTTY) io.write(agentHelp());
+                if (code === 0) await staleNotice(io);
                 return code;
             }
         }
@@ -275,12 +282,18 @@ export function processIo(): Io {
         env: process.env,
         isTTY: process.stdout.isTTY === true,
         write: (text) => process.stdout.write(text),
+        warn: (text) => process.stderr.write(text),
         stdin: async () => await Bun.stdin.text(),
         ...(interactive ? { ask: lineAsker(process.stdin, process.stdout) } : {}),
     };
 }
 
 if (import.meta.main) {
+    // A reader that takes the first line and leaves (`head -1`, as the skill asks) closes the pipe
+    // under the rest of the output; that is not an error worth a stack trace.
+    process.stdout.on("error", (error: NodeJS.ErrnoException) => {
+        if (error.code !== "EPIPE") throw error;
+    });
     const { serverCommands } = await import("./open.ts");
     process.exitCode = await run(process.argv.slice(2), processIo(), serverCommands);
 }

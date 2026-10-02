@@ -17,6 +17,13 @@ is the widest line printed: `declined | new c1 … c10`, a decline beside ten ne
 ordinary batch is 20 B. It is measured on a watch naming one doc, which prints no prefix; a watch
 covering several docs adds `<doc>: `, the doc's path from the working directory, to each line.
 
+The stale skill notice is the one line `margin <doc>` adds for an agent, and only when an installed
+skill that applies there is out of date: `margin skill 0.3.0 < 0.4.0: tell the user to run margin
+update`. It costs nothing when the skill is current, is said at most once a day per copy, and stops
+once the copy is refreshed or the user chose to keep theirs. It goes to stderr because the skill
+has the agent read stdout with `head -1`, which would cut a line after the URL. Its ceiling is 70 B;
+a line that would pass it (long version numbers) drops the versions and reads `margin skill old: …`.
+
 | Operation                                    | Ceiling (B) | Public (B) | Private (B) |
 | -------------------------------------------- | ----------: | ---------: | ----------: |
 | `watch`, per batch, widest line              |         120 |         46 |          46 |
@@ -25,6 +32,7 @@ covering several docs adds `<doc>: `, the doc's path from the working directory,
 | `pending`, per user edit (base)              |         200 |        120 |         147 |
 | `reply` / `resolve` / `suggest` ack          |          24 |         16 |          16 |
 | `agent-help`                                 |       1,830 |      1,827 |       1,827 |
+| `margin <doc>`, stale skill notice (stderr)  |          70 |         63 |          63 |
 | 10 seeded threads, full loop, all CLI output |       8,000 |      4,773 |       4,996 |
 | 10 seeded threads handed over, finish pass   |       5,000 |      4,310 |       4,419 |
 

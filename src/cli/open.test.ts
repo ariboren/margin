@@ -32,7 +32,9 @@ const NOBODY = {
 function margin(args: string[]) {
     const result = Bun.spawnSync(["bun", MAIN, ...args], {
         cwd: box.dir,
-        env: { ...process.env, ...box.env, MARGIN_NO_OPEN: "1" },
+        // HOME in the sandbox: an open looks for the user's installed skill, and the real one is
+        // not this test's to read.
+        env: { ...process.env, ...box.env, MARGIN_NO_OPEN: "1", HOME: box.dir },
     });
     return { code: result.exitCode, stdout: result.stdout.toString() };
 }

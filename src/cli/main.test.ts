@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import {
+    copyFileSync,
+    existsSync,
+    mkdirSync,
+    readFileSync,
+    realpathSync,
+    writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { createAnchor } from "../core/anchor.ts";
@@ -17,6 +24,7 @@ import {
     type ServerCommands,
 } from "./main.ts";
 import { recordDoc, sessionDocs } from "./registry.ts";
+import { packageVersion, stampSkill } from "./setup.ts";
 import { DOC, sandbox, type Sandbox } from "./testing.ts";
 
 const MAIN = join(import.meta.dir, "main.ts");
@@ -472,8 +480,9 @@ describe("every contract command against a temp dir with no daemon", () => {
     });
 });
 
-function io(isTTY = false): Io & { out: () => string } {
+function io(isTTY = false): Io & { out: () => string; err: () => string } {
     let stdout = "";
+    let stderr = "";
     return {
         cwd: box.dir,
         env: box.env,
@@ -481,8 +490,12 @@ function io(isTTY = false): Io & { out: () => string } {
         write: (text) => {
             stdout += text;
         },
+        warn: (text) => {
+            stderr += text;
+        },
         stdin: async () => "",
         out: () => stdout,
+        err: () => stderr,
     };
 }
 
@@ -506,6 +519,54 @@ describe("margin <doc>", () => {
         const target = io(true);
         await run(["doc.md"], target, server);
         expect(target.out()).toBe("http://127.0.0.1:1/d/x/doc.md?t=token\n");
+        expect(target.err()).toBe("");
+    });
+
+    describe("with an out-of-date skill installed in the project", () => {
+        beforeEach(() => {
+            mkdirSync(join(box.dir, ".claude/skills/margin"), { recursive: true });
+            writeFileSync(
+                join(box.dir, ".claude/skills/margin/SKILL.md"),
+                stampSkill("An older skill.\n", "0.0.1"),
+            );
+        });
+
+        test("an agent's stdout is unchanged and stderr carries one line", async () => {
+            const target = io(false);
+            expect(await run(["doc.md"], target, server)).toBe(0);
+            expect(target.out()).toBe(`http://127.0.0.1:1/d/x/doc.md?t=token\n${agentHelp()}`);
+            expect(target.err()).toBe(
+                `margin skill 0.0.1 < ${packageVersion()}: tell the user to run margin update\n`,
+            );
+            // Said once: the next open the same day is silent.
+            const again = io(false);
+            await run(["doc.md"], again, server);
+            expect(again.err()).toBe("");
+        });
+
+        test("a person reads it after the URL", async () => {
+            const target = io(true);
+            await run(["doc.md"], target, server);
+            expect(target.out()).toBe(
+                "http://127.0.0.1:1/d/x/doc.md?t=token\nThe margin skill for this project is out of date. Run margin update to refresh it.\n",
+            );
+            expect(target.err()).toBe("");
+        });
+
+        test("an open that failed says nothing about the skill", async () => {
+            const target = io(false);
+            const failing: ServerCommands = { ...server, open: async () => 1 };
+            expect(await run(["doc.md"], target, failing)).toBe(1);
+            expect(target.out() + target.err()).toBe("");
+        });
+
+        test("margin update --skill-only replaces it and the notice stops", async () => {
+            const target = io(false);
+            expect(await run(["update", "--skill-only"], target)).toBe(0);
+            expect(target.out()).toBe(`ok updated ${realpathSync(box.dir)}\n`);
+            await run(["doc.md"], target, server);
+            expect(target.err()).toBe("");
+        });
     });
 });
 

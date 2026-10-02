@@ -77,12 +77,21 @@ Tell the agent the doc is open in margin. Select a sentence, press `c`, type a q
 
 The agent works through the `margin` CLI and nothing else. It never reads the sidecar and never rewrites the whole file. `margin agent-help` prints the complete instructions in 1,827 bytes; the Claude Code skill and the AGENTS.md snippet are generated from that text. They tell the agent to answer in the doc, as replies and suggestions, and to end each turn in chat with a few words such as "Answered in margin." and nothing more, unless you've asked for updates there, something has gone wrong, or the review reaches a point that changes what it does next.
 
-**Claude Code.** `margin setup` asks where to install the skill (this project, all your projects, or not at all) and asks before overwriting a skill that differs from this version's. Run it again after upgrading margin. `--user` and `--force` answer those questions up front, and when it isn't run from a terminal (by an agent or a script) it never asks: it installs in the current project and refuses to overwrite a changed skill without `--force`.
+**Claude Code.** `margin setup` asks where to install the skill (this project, all your projects, or not at all) and asks before overwriting a skill you edited. `--user` and `--force` answer those questions up front, and when it isn't run from a terminal (by an agent or a script) it never asks: it installs in the current project and refuses to overwrite a changed skill without `--force`.
 
 ```sh
 margin setup           # .claude/skills/margin/
 margin setup --user    # ~/.claude/skills/margin/
 ```
+
+**Keeping the skill current.** An installed skill is a copy, so it stays as it was when margin is updated. `margin update` brings both up to date: it updates margin with the package manager that installed it (bun, npm or Homebrew; it prints the command before running it), then refreshes every skill copy on the machine that `margin setup` installed, plus the current project's and your user-wide one. A copy you never touched is replaced. A copy you edited is replaced only if you say yes at the terminal, and is left alone when nobody is there to ask. A project that has no skill doesn't get one. When margin runs through `bunx` or `npx`, or from a checkout, there is no install to update and only the skill is refreshed. `margin update --skill-only` skips the package step.
+
+```sh
+margin update                # margin itself, then every installed skill
+margin update --skill-only   # the skills only
+```
+
+When a skill for the current project or your user-wide one is out of date, `margin <doc>` says so in one line, and stops once it is refreshed or you chose to keep yours. A copy in another project that was installed by margin 0.3.0 or earlier, or copied in by hand, isn't on record: run `margin update` or `margin setup` from that project once.
 
 **Other agents.** `margin setup` also offers a snippet to paste into your `AGENTS.md`, which margin never edits itself. The same text is in [AGENTS.snippet.md](AGENTS.snippet.md). Any agent that can run shell commands can follow it, but only Claude Code has been tested end to end.
 

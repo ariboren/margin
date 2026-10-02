@@ -37,6 +37,14 @@ describe("budget on the public sample", () => {
         expect(result.breached).toBe(false);
     });
 
+    test("the stale skill notice is one stderr line of the real CLI", () => {
+        const notice = measured.ops.filter((op) => op.keys.includes("staleSkill"));
+        expect(notice).toHaveLength(1);
+        expect(notice[0]!.stdout).toMatch(
+            /^margin skill 0\.0\.1 < \S+: tell the user to run margin update\n$/,
+        );
+    });
+
     test("every batch wakes one compact line and goes through pending", () => {
         expect(measured.lines.map((line) => line.match(/c\d+/g))).toEqual([
             ["c1", "c2"],

@@ -2,11 +2,12 @@
 // sample, runs the real CLI (`run` from src/cli/main.ts) for every agent-facing op, and asserts
 // each op's stdout bytes against budget.json.
 // Output is numbers only, so it is safe to run on the private sample.
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import defaultCeilings from "../budget.json";
 import { run } from "../src/cli/main.ts";
+import { stampSkill } from "../src/cli/setup.ts";
 import { createAnchor } from "../src/core/anchor.ts";
 import { applyEdit } from "../src/core/apply.ts";
 import { decodeSource, flattenUnits, hashText, parseDoc } from "../src/core/blocks.ts";
@@ -248,6 +249,37 @@ async function cli(world: World, stdin: string, ...argv: string[]): Promise<stri
     return stdout;
 }
 
+/**
+ * What `margin <doc>` adds for an agent when the installed skill is out of date. It goes to
+ * stderr, so stdout keeps its first-line contract; the open itself is stubbed, since only the
+ * notice is measured. HOME is the world's: the user's real skill is never read.
+ */
+async function staleSkillNotice(world: World): Promise<string> {
+    const home = join(world.dir, "home");
+    mkdirSync(join(home, ".claude/skills/margin"), { recursive: true });
+    writeFileSync(
+        join(home, ".claude/skills/margin/SKILL.md"),
+        stampSkill("An older skill.\n", "0.0.1"),
+    );
+    let stderr = "";
+    const code = await run(
+        ["doc.md"],
+        {
+            cwd: world.dir,
+            env: { MARGIN_STATE_DIR: join(world.dir, "state"), HOME: home },
+            isTTY: false,
+            write: () => {},
+            warn: (text) => {
+                stderr += text;
+            },
+            stdin: async () => "",
+        },
+        { open: async () => 0, stop: async () => 0, status: async () => 0 },
+    );
+    if (code !== 0 || stderr === "") throw new Error(`margin <doc> printed no stale notice`);
+    return stderr;
+}
+
 function readDoc(world: World): ParsedDoc {
     return parseDoc(decodeSource(readFileSync(world.doc)));
 }
@@ -396,6 +428,11 @@ export async function measure(source: string): Promise<Measured> {
         name: "agent-help",
         keys: ["agentHelp"],
         stdout: await inWorld(source, (world) => cli(world, "", "agent-help")),
+    });
+    ops.push({
+        name: "stale skill notice",
+        keys: ["staleSkill"],
+        stdout: await inWorld(source, staleSkillNotice),
     });
 
     // The full loop: each batch wakes watch once, then one pending call reads its threads (the
