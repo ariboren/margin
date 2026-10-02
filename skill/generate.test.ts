@@ -62,10 +62,13 @@ describe("skill and AGENTS.md snippet", () => {
             });
         const versions = Object.values(RELEASED_UNSTAMPED);
         expect(versions).toEqual(["0.1.0", "0.2.0", "0.2.1", "0.2.2", "0.2.3", "0.3.0"]);
-        // A shallow checkout has no tags to compare against.
-        if (tagged("0.3.0").exitCode !== 0) return;
+        // A shallow checkout has no tags to compare against. CI fetches them, so there a missing
+        // tag fails the test instead of passing it unrun.
+        if (tagged("0.3.0").exitCode !== 0 && !process.env.CI) return;
         for (const [hash, version] of Object.entries(RELEASED_UNSTAMPED)) {
-            const text = tagged(version).stdout.toString();
+            const show = tagged(version);
+            expect(show.exitCode).toBe(0);
+            const text = show.stdout.toString();
             expect(createHash("sha256").update(text).digest("hex").slice(0, 16)).toBe(hash);
             expect(classifySkill(text, readFileSync(outputs.skill, "utf8"), "99.0.0")).toEqual({
                 kind: "older",
