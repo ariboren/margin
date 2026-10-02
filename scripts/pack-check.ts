@@ -140,7 +140,16 @@ async function smoke(tgz: string, extracted: string, scratch: string): Promise<v
     console.log(`install: node_modules ${(installKb / 1024).toFixed(1)} MB`);
     copyFileSync(publicSample, join(app, "fixtures/public-sample.md"));
 
-    const env = { ...process.env, MARGIN_NO_OPEN: "1", MARGIN_STATE_DIR: join(scratch, "state") };
+    // A temp HOME too: `margin <doc>` looks at the user's installed skill, and the real one is
+    // not this check's to read.
+    const home = join(scratch, "home");
+    mkdirSync(home);
+    const env = {
+        ...process.env,
+        MARGIN_NO_OPEN: "1",
+        MARGIN_STATE_DIR: join(scratch, "state"),
+        HOME: home,
+    };
     try {
         const opened = exec(["bunx", "margin-md", "fixtures/public-sample.md"], { cwd: app, env });
         const url = opened.stdout.split("\n")[0] ?? "";
@@ -162,7 +171,6 @@ async function smoke(tgz: string, extracted: string, scratch: string): Promise<v
     }
 
     const skill = readFileSync(join(extracted, "skill/margin/SKILL.md"), "utf8");
-    const home = join(scratch, "home");
     const runs: [string[], string, string][] = [
         [["setup"], "ok installed .claude/skills/margin/SKILL.md", join(app, ".claude")],
         [["setup"], "ok unchanged .claude/skills/margin/SKILL.md", join(app, ".claude")],
@@ -173,7 +181,7 @@ async function smoke(tgz: string, extracted: string, scratch: string): Promise<v
         ],
     ];
     for (const [args, ack, base] of runs) {
-        const out = must(["bunx", "margin-md", ...args], { cwd: app, env: { ...env, HOME: home } });
+        const out = must(["bunx", "margin-md", ...args], { cwd: app, env });
         if (out.split("\n")[0] !== ack) fail(`margin ${args.join(" ")}: ${out.split("\n")[0]}`);
         if (readFileSync(join(base, "skills/margin/SKILL.md"), "utf8") !== skill) {
             fail(`margin ${args.join(" ")} installed a different skill`);

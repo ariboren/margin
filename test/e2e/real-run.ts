@@ -86,7 +86,12 @@ writeFileSync(
 );
 chmodSync(join(binDir, "margin"), 0o755);
 
-const daemonEnv = { ...process.env, MARGIN_STATE_DIR: stateDir, MARGIN_NO_OPEN: "1" };
+const daemonEnv = {
+    ...process.env,
+    MARGIN_STATE_DIR: stateDir,
+    MARGIN_NO_OPEN: "1",
+    HOME: join(work, "home"),
+};
 const { url, docId } = await openDoc(doc, { env: daemonEnv, openTab: false });
 const tab = new Tab(url, docId);
 const driverEnv = { MARGIN_STATE_DIR: stateDir, MARGIN_DEBOUNCE_MS: "0" };

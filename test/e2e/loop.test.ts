@@ -33,8 +33,14 @@ let daemonEnv: Record<string, string | undefined>;
 
 beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), "margin-e2e-"));
-    // Own state dir: other checkouts' tests and a user's daemon never see this one.
-    daemonEnv = { ...process.env, MARGIN_STATE_DIR: join(root, "state"), MARGIN_NO_OPEN: "1" };
+    // Own state dir: other checkouts' tests and a user's daemon never see this one. Own HOME: nothing
+    // under the real one is read.
+    daemonEnv = {
+        ...process.env,
+        MARGIN_STATE_DIR: join(root, "state"),
+        MARGIN_NO_OPEN: "1",
+        HOME: join(root, "home"),
+    };
 });
 
 afterAll(async () => {
