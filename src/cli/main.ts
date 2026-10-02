@@ -97,7 +97,7 @@ export const NO_DOCS =
     "no docs open in this session yet; waiting (margin pending <doc> adds one)\n";
 
 export function onlyDoc(doc: string): string {
-    return `only ${doc}; for all docs: MARGIN_SESSION=<name> on every margin command, margin pending <doc> on each, then margin watch\n`;
+    return `only ${doc}; for all docs: stop this watch, MARGIN_SESSION=<name> on every margin command, margin pending <doc> on each, then margin watch\n`;
 }
 
 export async function run(argv: string[], io: Io, server?: ServerCommands): Promise<number> {

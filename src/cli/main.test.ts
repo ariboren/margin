@@ -219,7 +219,7 @@ describe("every contract command against a temp dir with no daemon", () => {
                 `${onlyDoc("doc.md")}new c1 "Findings"\n`,
             );
             expect(onlyDoc("doc.md")).toStartWith(
-                "only doc.md; for all docs: MARGIN_SESSION=<name> on every margin command",
+                "only doc.md; for all docs: stop this watch, MARGIN_SESSION=<name> on every margin command",
             );
             await box.cli(["pending", "b/doc.md"]);
             await commentOn(other, "B");
