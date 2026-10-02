@@ -9,9 +9,10 @@ import {
     readFileSync,
     realpathSync,
     renameSync,
+    statSync,
     writeFileSync,
 } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { withLock } from "../core/lock.ts";
 import { repoRoot } from "../server/doc-location.ts";
 import type { Env } from "../server/open-tab.ts";
@@ -163,6 +164,40 @@ export function skillTargets(io: Pick<Io, "cwd" | "env">): { project: string; us
     };
 }
 
+const SKILL_SEGMENTS = SKILL_PATH.split("/");
+
+function namedAsSkill(path: string): boolean {
+    const parts = path.split(/[\\/]/);
+    return SKILL_SEGMENTS.every(
+        (segment, index) => parts[parts.length - SKILL_SEGMENTS.length + index] === segment,
+    );
+}
+
+function isRegularFile(path: string): boolean {
+    try {
+        return statSync(path).isFile();
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Whether a path read from the record may be read and written as a skill copy. The record is a
+ * file anyone on the account can alter, so a path in it is only trusted when it is absolute, is
+ * named `.claude/skills/margin/SKILL.md`, is a regular file, and is still so named once symlinks
+ * are resolved: a link out of a skill directory is not followed.
+ */
+export function checkRecorded(path: string): "ok" | "gone" | "not-a-skill" {
+    if (!isAbsolute(path) || !namedAsSkill(path)) return "not-a-skill";
+    let real: string;
+    try {
+        real = realpathSync(path);
+    } catch {
+        return "gone";
+    }
+    return namedAsSkill(real) && isRegularFile(real) ? "ok" : "not-a-skill";
+}
+
 export const SKILL_INSTALLS_MAX = 50;
 
 export interface SkillInstalls {
@@ -210,20 +245,26 @@ export function readInstalls(env: Env): SkillInstalls {
 }
 
 /**
- * Changes the record under its lock. A copy whose file is gone leaves the record on every change,
- * with what was noted about it, and the list keeps the newest `SKILL_INSTALLS_MAX`.
+ * Changes the record under its lock. On every change a path leaves the record, with what was
+ * noted about it, when its file is gone or it does not pass `checkRecorded`; the list keeps the
+ * newest `SKILL_INSTALLS_MAX`. The copies that apply where the command runs come from the working
+ * directory and HOME, not from the record, so they only need to be files: a `.claude` that is a
+ * link into a dotfiles directory stays on record for its own user.
  */
 export async function changeInstalls(
-    env: Env,
+    io: Pick<Io, "cwd" | "env">,
     change: (installs: SkillInstalls) => void,
 ): Promise<SkillInstalls> {
+    const { env } = io;
     const paths = installsPaths(env);
     ensureStateDir(deviceDir(env));
+    const targets = skillTargets(io);
+    const here = new Set([targets.project, targets.user]);
     return await withLock(paths.lock, () => {
         const installs = readInstalls(env);
         change(installs);
         installs.copies = [...new Set(installs.copies)]
-            .filter((path) => existsSync(path))
+            .filter((path) => (here.has(path) ? isRegularFile(path) : checkRecorded(path) === "ok"))
             .slice(0, SKILL_INSTALLS_MAX);
         const listed = new Set(installs.copies);
         for (const notes of [installs.told, installs.kept]) {
@@ -335,7 +376,7 @@ export async function setup(io: Io, options: SetupOptions = {}): Promise<number>
         writeFileSync(target, skill);
     }
     try {
-        await changeInstalls(io.env, (installs) =>
+        await changeInstalls(io, (installs) =>
             noteInstall(installs, canonical(target), outcome === "kept" ? version : undefined),
         );
     } catch {

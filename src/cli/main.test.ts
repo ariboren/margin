@@ -563,7 +563,9 @@ describe("margin <doc>", () => {
         test("margin update --skill-only replaces it and the notice stops", async () => {
             const target = io(false);
             expect(await run(["update", "--skill-only"], target)).toBe(0);
-            expect(target.out()).toBe(`ok updated ${realpathSync(box.dir)}\n`);
+            expect(target.out()).toBe(
+                `ok updated ${join(realpathSync(box.dir), ".claude/skills/margin/SKILL.md")}\n`,
+            );
             await run(["doc.md"], target, server);
             expect(target.err()).toBe("");
         });

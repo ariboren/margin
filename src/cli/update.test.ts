@@ -31,6 +31,7 @@ import {
     staleNotice,
     staleSentence,
     update,
+    type Installer,
     type UpdateDeps,
 } from "./update.ts";
 
@@ -61,6 +62,9 @@ function put(path: string, text: string): string {
 }
 
 const read = (path: string) => readFileSync(path, "utf8");
+const at = (root: string) => join(root, INSTALLED);
+/** Where the commands under test run: the project, with the sandbox's HOME and device directory. */
+const here = () => ({ cwd: project, env: sandboxEnv() });
 
 /** HOME and the device directory both inside the temp dir: the real ones are never touched. */
 function sandboxEnv(): Io["env"] {
@@ -133,22 +137,53 @@ function fake(root: string, options: { bin?: string | null; onRun?: () => number
 }
 
 describe("how margin was installed", () => {
-    test("each package manager is known by where it keeps global installs", () => {
+    test("bun and Homebrew are known by where they keep global installs", () => {
         expect(detectInstaller("/u/.bun/install/global/node_modules/margin-md")).toEqual({
             kind: "bun",
             argv: ["bun", "add", "-g", "margin-md@latest"],
         });
-        expect(detectInstaller("/usr/local/lib/node_modules/margin-md")).toEqual({
-            kind: "npm",
-            argv: ["npm", "install", "-g", "margin-md@latest"],
-        });
-        expect(
-            detectInstaller("C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\margin-md"),
-        ).toEqual({ kind: "npm", argv: ["npm", "install", "-g", "margin-md@latest"] });
         expect(detectInstaller("/opt/homebrew/Cellar/margin/0.3.0/libexec")).toEqual({
             kind: "brew",
             argv: ["brew", "upgrade", "ariboren/tap/margin"],
         });
+    });
+
+    test("npm only by its whole global layout: lib/node_modules with the bin link beside lib", () => {
+        const npm: Installer = { kind: "npm", argv: ["npm", "install", "-g", "margin-md@latest"] };
+        const root = join(dir, "prefix/lib/node_modules/margin-md");
+        mkdirSync(root, { recursive: true });
+        expect(detectInstaller(root).kind).toBe("unknown");
+        put(join(dir, "prefix/bin/margin"), "");
+        expect(detectInstaller(root)).toEqual(npm);
+
+        // Windows: node_modules and margin.cmd side by side in the prefix.
+        const windows = join(dir, "roaming/npm/node_modules/margin-md");
+        mkdirSync(windows, { recursive: true });
+        expect(detectInstaller(windows).kind).toBe("unknown");
+        put(join(dir, "roaming/npm/margin.cmd"), "");
+        expect(detectInstaller(windows)).toEqual(npm);
+    });
+
+    test("a project's own dependency is never a global npm install, whatever its folders are called", () => {
+        // A project folder named lib, with a bin beside it that even holds a margin.
+        const local = join(dir, "work/lib/node_modules/margin-md");
+        mkdirSync(local, { recursive: true });
+        put(join(dir, "work/bin/margin"), "");
+        put(
+            join(dir, "work/lib/package.json"),
+            JSON.stringify({ dependencies: { "margin-md": "*" } }),
+        );
+        expect(detectInstaller(local).kind).toBe("unknown");
+
+        const named = join(dir, "npm/node_modules/margin-md");
+        mkdirSync(named, { recursive: true });
+        put(join(dir, "npm/package.json"), "{}");
+        put(join(dir, "npm/margin.cmd"), "");
+        expect(detectInstaller(named).kind).toBe("unknown");
+
+        mkdirSync(join(dir, "prefix/lib/node_modules/other"), { recursive: true });
+        put(join(dir, "prefix/bin/margin"), "");
+        expect(detectInstaller(join(dir, "prefix/lib/node_modules/other")).kind).toBe("unknown");
     });
 
     test("a one-off run, a checkout and anything else update no package", () => {
@@ -171,7 +206,7 @@ describe("margin update --skill-only", () => {
         const elsewhere = put(join(dir, "other", INSTALLED), OLDER);
         const upToDate = put(join(dir, "fresh", INSTALLED), skillOf("1.0.0"));
         const gone = join(dir, "gone", INSTALLED);
-        await changeInstalls(sandboxEnv(), (installs) => {
+        await changeInstalls(here(), (installs) => {
             put(gone, OLDER);
             for (const path of [elsewhere, upToDate, gone]) noteInstall(installs, path);
             installs.told[elsewhere] = { version: "1.0.0", at: 1 };
@@ -184,10 +219,10 @@ describe("margin update --skill-only", () => {
         expect(deps.ran).toEqual([]);
         expect(io.out()).toBe(
             [
-                `ok updated ${project}`,
+                `ok updated ${at(project)}`,
                 `ok updated user (~/${INSTALLED})`,
-                `ok current ${join(dir, "fresh")}`,
-                `ok updated ${join(dir, "other")}`,
+                `ok current ${at(join(dir, "fresh"))}`,
+                `ok updated ${at(join(dir, "other"))}`,
                 "",
             ].join("\n"),
         );
@@ -217,7 +252,7 @@ describe("margin update --skill-only", () => {
         expect(await update(io, { skillOnly: true }, fake(root))).toBe(0);
         expect(io.out()).toBe(
             [
-                `kept ${project}: edited; run margin update at a terminal to choose, or margin setup --force there overwrites`,
+                `kept ${at(project)}: edited; run margin update at a terminal to choose, or margin setup --force in that project overwrites`,
                 `kept user (~/${INSTALLED}): edited; run margin update at a terminal to choose, or margin setup --user --force overwrites`,
                 "",
             ].join("\n"),
@@ -233,10 +268,10 @@ describe("margin update --skill-only", () => {
         const io = terminal({ answers: ["", "y"] });
         expect(await update(io, { skillOnly: true }, fake(root))).toBe(0);
         expect(io.asked).toEqual([
-            `${project} has changes that are not margin's. Replace it with 1.0.0's? [y/N] `,
+            `${at(project)} has changes that are not margin's. Replace it with 1.0.0's? [y/N] `,
             `user (~/${INSTALLED}) has changes that are not margin's. Replace it with 1.0.0's? [y/N] `,
         ]);
-        expect(io.out()).toBe(`kept ${project}\nok updated user (~/${INSTALLED})\n`);
+        expect(io.out()).toBe(`kept ${at(project)}\nok updated user (~/${INSTALLED})\n`);
         expect(read(mine)).toBe(EDITED);
         expect(read(users)).toBe(skillOf("1.0.0"));
         expect(readInstalls(sandboxEnv()).kept).toEqual({ [mine]: "1.0.0" });
@@ -247,7 +282,7 @@ describe("margin update --skill-only", () => {
         const newer = put(join(project, INSTALLED), skillOf("2.0.0"));
         const io = terminal({ answers: [] });
         expect(await update(io, { skillOnly: true }, fake(root))).toBe(0);
-        expect(io.out()).toBe(`left ${project}: from a newer margin (2.0.0)\n`);
+        expect(io.out()).toBe(`left ${at(project)}: from a newer margin (2.0.0)\n`);
         expect(io.asked).toEqual([]);
         expect(read(newer)).toBe(skillOf("2.0.0"));
     });
@@ -258,7 +293,7 @@ describe("margin update --skill-only", () => {
         chmodSync(mine, 0o400);
         const io = terminal();
         expect(await update(io, { skillOnly: true }, fake(root))).toBe(1);
-        expect(io.out()).toBe(`err ${project}: not written (EACCES)\n`);
+        expect(io.out()).toBe(`err ${at(project)}: not written (EACCES)\n`);
     });
 
     test("a record that cannot be written does not fail the refresh", async () => {
@@ -267,7 +302,94 @@ describe("margin update --skill-only", () => {
         writeFileSync(join(dir, "state"), "not a directory");
         const io = terminal();
         expect(await update(io, { skillOnly: true }, fake(root))).toBe(0);
-        expect(io.out()).toBe(`ok updated ${project}\n`);
+        expect(io.out()).toBe(`ok updated ${at(project)}\n`);
+    });
+
+    test("a path in an altered record is never read or written unless it is a skill copy", async () => {
+        const root = fakePackage(join(dir, "pkg"), "1.0.0");
+        // Each holds an untouched older skill, which a trusted copy would have replaced unasked.
+        const elsewhere = put(join(dir, "notes/important.md"), OLDER);
+        const outside = put(join(dir, "outside/target.md"), OLDER);
+        const linked = join(dir, "linked", INSTALLED);
+        mkdirSync(dirname(linked), { recursive: true });
+        symlinkSync(outside, linked);
+        const directory = join(dir, "folder", INSTALLED);
+        mkdirSync(directory, { recursive: true });
+        const relative = `relative/${INSTALLED}`;
+        put(join(project, relative), OLDER);
+        const gone = join(dir, "gone", INSTALLED);
+        const honest = put(join(dir, "honest", INSTALLED), OLDER);
+        mkdirSync(join(dir, "state"));
+        writeFileSync(
+            join(dir, "state/skill-installs.json"),
+            JSON.stringify({
+                copies: [elsewhere, linked, directory, relative, gone, honest],
+                told: { [elsewhere]: { version: "1.0.0", at: 1 } },
+                kept: { [linked]: "1.0.0" },
+            }),
+        );
+
+        const io = terminal({ answers: ["y", "y", "y", "y"] });
+        expect(await update(io, { skillOnly: true }, fake(root))).toBe(0);
+        expect(io.asked).toEqual([]);
+        expect(io.out()).toBe(
+            [
+                `skipped ${elsewhere}: not a margin skill copy, dropped from the record`,
+                `skipped ${linked}: not a margin skill copy, dropped from the record`,
+                `skipped ${directory}: not a margin skill copy, dropped from the record`,
+                `skipped ${relative}: not a margin skill copy, dropped from the record`,
+                `ok updated ${honest}`,
+                "",
+            ].join("\n"),
+        );
+        for (const path of [elsewhere, outside, join(project, relative)]) {
+            expect(read(path)).toBe(OLDER);
+        }
+        expect(read(honest)).toBe(skillOf("1.0.0"));
+        expect(readInstalls(sandboxEnv())).toEqual({ copies: [honest], told: {}, kept: {} });
+    });
+
+    test("a link that stays inside a skill directory is followed", async () => {
+        const root = fakePackage(join(dir, "pkg"), "1.0.0");
+        const real = put(join(dir, "real", INSTALLED), OLDER);
+        symlinkSync(join(dir, "real"), join(dir, "alias"));
+        await changeInstalls(here(), (installs) => noteInstall(installs, at(join(dir, "alias"))));
+        const io = terminal();
+        expect(await update(io, { skillOnly: true }, fake(root))).toBe(0);
+        expect(io.out()).toBe(`ok updated ${at(join(dir, "alias"))}\n`);
+        expect(read(real)).toBe(skillOf("1.0.0"));
+    });
+
+    test("an edited copy is asked about by its full path", async () => {
+        const root = fakePackage(join(dir, "pkg"), "1.0.0");
+        const other = put(join(dir, "other", INSTALLED), EDITED);
+        await changeInstalls(here(), (installs) => noteInstall(installs, other));
+        const io = terminal({ answers: [""] });
+        await update(io, { skillOnly: true }, fake(root));
+        expect(io.asked).toEqual([
+            `${other} has changes that are not margin's. Replace it with 1.0.0's? [y/N] `,
+        ]);
+        expect(other.endsWith(INSTALLED)).toBe(true);
+    });
+
+    test("a copy that cannot be read is one error line; the rest are still refreshed, exit 1", async () => {
+        const root = fakePackage(join(dir, "pkg"), "1.0.0");
+        mkdirSync(join(project, INSTALLED), { recursive: true });
+        const locked = put(join(home, INSTALLED), OLDER);
+        chmodSync(locked, 0o000);
+        const other = put(join(dir, "other", INSTALLED), OLDER);
+        await changeInstalls(here(), (installs) => noteInstall(installs, other));
+        const io = terminal();
+        expect(await update(io, { skillOnly: true }, fake(root))).toBe(1);
+        expect(io.out()).toBe(
+            [
+                `err ${at(project)}: not read (EISDIR)`,
+                `err user (~/${INSTALLED}): not read (EACCES)`,
+                `ok updated ${other}`,
+                "",
+            ].join("\n"),
+        );
+        expect(read(other)).toBe(skillOf("1.0.0"));
     });
 
     test("the real package, from this checkout, refreshes with its own skill", async () => {
@@ -331,7 +453,10 @@ describe("margin update", () => {
         const root = fakePackage(join(dir, "usr/lib/node_modules/margin-md"), "1.0.0");
         put(join(project, INSTALLED), OLDER);
         const io = terminal();
-        const deps = fake(root, { bin: linkBin(root) });
+        // npm's own link, which is also what marks the layout as a global install.
+        mkdirSync(join(dir, "usr/bin"));
+        symlinkSync(join(root, "src/cli/main.ts"), join(dir, "usr/bin/margin"));
+        const deps = fake(root, { bin: join(dir, "usr/bin/margin") });
         expect(await update(io, {}, deps)).toBe(0);
         expect(deps.ran).toEqual([["npm", "install", "-g", "margin-md@latest"]]);
         expect(io.out()).toBe(
@@ -339,7 +464,7 @@ describe("margin update", () => {
                 "margin 1.0.0, installed with npm",
                 "running: npm install -g margin-md@latest",
                 "margin 1.0.0 is already the latest",
-                `ok updated ${project}`,
+                `ok updated ${at(project)}`,
                 "",
             ].join("\n"),
         );
@@ -357,7 +482,7 @@ describe("margin update", () => {
                 "margin 1.0.0, installed with bun",
                 "running: bun add -g margin-md@latest",
                 "err update failed (bun exited 1); refreshing the skill from 1.0.0",
-                `ok updated ${project}`,
+                `ok updated ${at(project)}`,
                 "",
             ].join("\n"),
         );
@@ -388,7 +513,7 @@ describe("margin update", () => {
                     "margin 1.0.0, installed with bun",
                     "running: bun add -g margin-md@latest",
                     "margin 1.0.0 -> 1.1.0",
-                    `ok updated ${project}`,
+                    `ok updated ${at(project)}`,
                     "skill refreshed from 1.0.0; run margin update --skill-only to finish",
                     "",
                 ].join("\n"),
@@ -449,7 +574,7 @@ describe("margin update", () => {
                     "margin 1.0.0, installed with Homebrew",
                     "running: brew upgrade ariboren/tap/margin",
                     "margin 1.0.0: brew had nothing newer; the tap may not have the latest release yet",
-                    `ok updated ${project}`,
+                    `ok updated ${at(project)}`,
                     "",
                 ].join("\n"),
             );
@@ -482,7 +607,7 @@ describe("margin update", () => {
             expect(await update(io, {}, deps)).toBe(0);
             expect(deps.ran).toEqual([]);
             expect(io.out()).toBe(
-                `margin 1.0.0${reason}; package not updated, refreshing the skill only\nok updated ${project}\n`,
+                `margin 1.0.0${reason}; package not updated, refreshing the skill only\nok updated ${at(project)}\n`,
             );
         });
     }
@@ -557,12 +682,12 @@ describe("the stale skill notice on margin <doc>", () => {
 
     test("silent once the copy is current, or kept by the user for this version", async () => {
         const mine = put(join(project, INSTALLED), EDITED);
-        await changeInstalls(sandboxEnv(), (installs) => noteInstall(installs, mine, VERSION));
+        await changeInstalls(here(), (installs) => noteInstall(installs, mine, VERSION));
         const io = terminal();
         await staleNotice(io);
         expect(io.err()).toBe("");
         // Kept for another version: this one says so again.
-        await changeInstalls(sandboxEnv(), (installs) => noteInstall(installs, mine, "0.0.1"));
+        await changeInstalls(here(), (installs) => noteInstall(installs, mine, "0.0.1"));
         await staleNotice(io);
         expect(io.err()).toBe("margin skill old: tell the user to run margin update\n");
 

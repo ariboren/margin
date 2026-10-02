@@ -2,11 +2,12 @@
 // package manager that installed it, then refreshes every skill copy it knows of; the stale
 // notice is the one line `margin <doc>` adds when a copy that applies there is out of date.
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { Io } from "./main.ts";
 import {
     SKILL_PATH,
     changeInstalls,
+    checkRecorded,
     choose,
     classifySkill,
     compareVersions,
@@ -15,6 +16,7 @@ import {
     packageVersion,
     readInstalls,
     skillTargets,
+    type SkillClass,
 } from "./setup.ts";
 
 /** Runs a command with the terminal attached and answers with its exit code. */
@@ -49,10 +51,26 @@ export function detectInstaller(root: string): Installer {
     }
     if (path.includes("/install/cache/") || path.includes("/bunx-")) return { kind: "bunx" };
     if (path.includes("/_npx/")) return { kind: "npx" };
-    if (/\/(lib|npm)\/node_modules\/margin-md$/.test(path)) {
+    if (isNpmGlobal(root)) {
         return { kind: "npm", argv: ["npm", "install", "-g", "margin-md@latest"] };
     }
     return { kind: existsSync(join(root, ".git")) ? "checkout" : "unknown" };
+}
+
+/**
+ * npm's global layout and nothing looser, since a wrong yes runs a global install nobody asked
+ * for: the package sits in `<prefix>/lib/node_modules` with npm's `margin` link in
+ * `<prefix>/bin` (on Windows `<prefix>/node_modules` with `margin.cmd` beside it), and the
+ * directory holding `node_modules` has no `package.json`, which a project's own dependency
+ * folder always has.
+ */
+function isNpmGlobal(root: string): boolean {
+    const modules = dirname(root);
+    const holder = dirname(modules);
+    if (basename(root) !== "margin-md" || basename(modules) !== "node_modules") return false;
+    if (existsSync(join(holder, "package.json"))) return false;
+    if (basename(holder) === "lib") return existsSync(join(dirname(holder), "bin", "margin"));
+    return existsSync(join(holder, "margin.cmd"));
 }
 
 const NOT_UPDATED: Record<Exclude<Installer["kind"], "bun" | "brew" | "npm">, string> = {
@@ -162,9 +180,13 @@ export async function update(
     return ok ? 0 : 1;
 }
 
-/** "user", or the project the copy belongs to. */
+/** The copy by its full path, so a prompt never asks about a file it does not name. */
 function location(path: string, user: string | undefined): string {
-    return path === user ? `user (~/${SKILL_PATH})` : dirname(dirname(dirname(dirname(path))));
+    return path === user ? `user (~/${SKILL_PATH})` : path;
+}
+
+function reason(error: unknown): string {
+    return (error as NodeJS.ErrnoException).code ?? "failed";
 }
 
 /**
@@ -174,15 +196,31 @@ function location(path: string, user: string | undefined): string {
  */
 async function refreshSkills(io: Io, skill: string, version: string): Promise<boolean> {
     const targets = skillTargets(io);
-    const candidates = [targets.project, targets.user, ...readInstalls(io.env).copies];
-    const paths = [...new Set(candidates)].filter(
+    // The project's and the user's come from where the command runs. A recorded path comes from a
+    // file, so it is checked before it is read or written, and one that fails is never touched.
+    const paths = [targets.project, targets.user].filter(
         (path): path is string => path !== undefined && existsSync(path),
     );
+    for (const path of readInstalls(io.env).copies) {
+        if (paths.includes(path)) continue;
+        const check = checkRecorded(path);
+        if (check === "ok") paths.push(path);
+        else if (check === "not-a-skill") {
+            io.write(`skipped ${path}: not a margin skill copy, dropped from the record\n`);
+        }
+    }
     const settled = new Map<string, string | undefined>();
     let ok = true;
     for (const path of paths) {
         const where = location(path, targets.user);
-        const state = classifySkill(readFileSync(path, "utf8"), skill, version);
+        let state: SkillClass;
+        try {
+            state = classifySkill(readFileSync(path, "utf8"), skill, version);
+        } catch (error) {
+            io.write(`err ${where}: not read (${reason(error)})\n`);
+            ok = false;
+            continue;
+        }
         if (state.kind === "current") {
             io.write(`ok current ${where}\n`);
             settled.set(path, undefined);
@@ -197,7 +235,7 @@ async function refreshSkills(io: Io, skill: string, version: string): Promise<bo
                 const force =
                     path === targets.user
                         ? "margin setup --user --force overwrites"
-                        : "margin setup --force there overwrites";
+                        : "margin setup --force in that project overwrites";
                 io.write(
                     `kept ${where}: edited; run margin update at a terminal to choose, or ${force}\n`,
                 );
@@ -220,13 +258,13 @@ async function refreshSkills(io: Io, skill: string, version: string): Promise<bo
             io.write(`ok updated ${where}\n`);
             settled.set(path, undefined);
         } catch (error) {
-            io.write(`err ${where}: not written (${(error as NodeJS.ErrnoException).code})\n`);
+            io.write(`err ${where}: not written (${reason(error)})\n`);
             ok = false;
         }
     }
     if (paths.length === 0) io.write("ok no skill installed; margin setup installs one\n");
     try {
-        await changeInstalls(io.env, (installs) => {
+        await changeInstalls(io, (installs) => {
             installs.copies = [...paths, ...installs.copies];
             for (const [path, kept] of settled) {
                 delete installs.told[path];
@@ -292,7 +330,7 @@ export async function staleNotice(io: Io, now = Date.now()): Promise<void> {
             return !(last?.version === version && now - last.at < TOLD_EVERY_MS);
         });
         if (due.length === 0) return;
-        await changeInstalls(io.env, (installs) => {
+        await changeInstalls(io, (installs) => {
             for (const { path } of due) {
                 if (!installs.copies.includes(path)) installs.copies.unshift(path);
                 installs.told[path] = { version, at: now };

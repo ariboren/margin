@@ -362,12 +362,12 @@ describe("the record of installed copies", () => {
         const env = sandboxEnv();
         await runSetup();
         await runSetup({ user: true });
-        await changeInstalls(env, (installs) => {
+        await changeInstalls({ cwd: dir, env }, (installs) => {
             installs.told[join(dir, INSTALLED)] = { version: VERSION, at: 1 };
             installs.kept[join(dir, INSTALLED)] = VERSION;
         });
         rmSync(join(dir, ".claude"), { recursive: true });
-        const installs = await changeInstalls(env, () => {});
+        const installs = await changeInstalls({ cwd: dir, env }, () => {});
         expect(installs).toEqual({ copies: [join(home, INSTALLED)], told: {}, kept: {} });
         expect(readInstalls(env)).toEqual(installs);
     });
@@ -380,7 +380,7 @@ describe("the record of installed copies", () => {
             writeFileSync(path, SKILL);
             return path;
         });
-        const installs = await changeInstalls(env, (record) => {
+        const installs = await changeInstalls({ cwd: dir, env }, (record) => {
             for (const path of paths) noteInstall(record, path);
         });
         expect(installs.copies).toHaveLength(SKILL_INSTALLS_MAX);
@@ -412,6 +412,18 @@ describe("the record of installed copies", () => {
         const result = await runSetup();
         expect(result.code).toBe(0);
         expect(result.first).toBe(`ok installed ${INSTALLED}`);
+    });
+
+    test("a .claude linked into another directory stays on record for its own user only", async () => {
+        mkdirSync(join(dir, "dotfiles/claude"), { recursive: true });
+        symlinkSync(join(dir, "dotfiles/claude"), join(home, ".claude"));
+        await runSetup({ user: true });
+        const real = join(dir, "dotfiles/claude/skills/margin/SKILL.md");
+        expect(readInstalls(sandboxEnv()).copies).toEqual([real]);
+        // Read back from the record alone, the path is not named like a skill copy: dropped.
+        const stranger = { cwd: dir, env: { ...sandboxEnv(), HOME: join(dir, "elsewhere") } };
+        expect((await changeInstalls(stranger, () => {})).copies).toEqual([]);
+        expect(readFileSync(real, "utf8")).toBe(SKILL);
     });
 
     test("a copy reached through a symlink has one name", async () => {
