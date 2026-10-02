@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentHelp } from "../src/cli/main.ts";
+import { RELEASED_UNSTAMPED, classifySkill, packageVersion } from "../src/cli/setup.ts";
 import { drifted, outputs, readHelp, render } from "./generate.ts";
 
 describe("skill and AGENTS.md snippet", () => {
@@ -40,6 +42,35 @@ describe("skill and AGENTS.md snippet", () => {
             const preamble = text.slice(0, text.indexOf("```text"));
             expect(preamble).toContain("Keep one `margin watch`, with no path");
             expect(preamble).toContain("`MARGIN_SESSION`");
+        }
+    });
+
+    test("the skill ends with a stamp, outside the fenced help; the snippet has none", () => {
+        const help = readHelp();
+        const { skill, snippet } = render(help, "1.2.3");
+        expect(skill).toMatch(/```\n\n<!-- margin-skill 1\.2\.3 [0-9a-f]{12} -->\n$/);
+        expect(skill).toContain(`\`\`\`text\n${help}\`\`\`\n`);
+        expect(snippet).not.toContain("margin-skill");
+        expect(readFileSync(outputs.skill, "utf8")).toBe(render(help, packageVersion()).skill);
+        expect(classifySkill(skill, render(help, "1.2.4").skill, "1.2.4").kind).toBe("current");
+    });
+
+    test("the hashes of the skills released before the stamp match the tags", () => {
+        const tagged = (version: string) =>
+            Bun.spawnSync(["git", "show", `v${version}:skill/margin/SKILL.md`], {
+                cwd: join(import.meta.dir, ".."),
+            });
+        const versions = Object.values(RELEASED_UNSTAMPED);
+        expect(versions).toEqual(["0.1.0", "0.2.0", "0.2.1", "0.2.2", "0.2.3", "0.3.0"]);
+        // A shallow checkout has no tags to compare against.
+        if (tagged("0.3.0").exitCode !== 0) return;
+        for (const [hash, version] of Object.entries(RELEASED_UNSTAMPED)) {
+            const text = tagged(version).stdout.toString();
+            expect(createHash("sha256").update(text).digest("hex").slice(0, 16)).toBe(hash);
+            expect(classifySkill(text, readFileSync(outputs.skill, "utf8"), "99.0.0")).toEqual({
+                kind: "older",
+                version,
+            });
         }
     });
 

@@ -3,6 +3,7 @@
 // disk differs from what the source renders to; generate.test.ts asserts the same.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { packageVersion, stampSkill } from "../src/cli/setup.ts";
 
 const root = join(import.meta.dir, "..");
 
@@ -35,26 +36,33 @@ function fenced(help: string): string {
     return `\`\`\`text\n${help.replace(/\n?$/, "\n")}\`\`\`\n`;
 }
 
-export function render(help: string): Record<Output, string> {
+/**
+ * The skill ends with a stamp naming this version, which is how an installed copy is told from an
+ * older or an edited one. The snippet has none: margin never installs it.
+ */
+export function render(help: string, version = packageVersion()): Record<Output, string> {
     return {
-        skill: [
-            "---",
-            "name: margin",
-            "description: Answer review threads on a markdown doc through the margin CLI. Use when a doc is open in margin, when `margin watch` or `margin pending` prints a batch, or when a thread id like c3 needs a reply or suggestion.",
-            "---",
-            "",
-            generated,
-            "",
-            opening,
-            "",
-            watching,
-            "",
-            silence,
-            "",
-            naming,
-            "",
-            fenced(help),
-        ].join("\n"),
+        skill: stampSkill(
+            [
+                "---",
+                "name: margin",
+                "description: Answer review threads on a markdown doc through the margin CLI. Use when a doc is open in margin, when `margin watch` or `margin pending` prints a batch, or when a thread id like c3 needs a reply or suggestion.",
+                "---",
+                "",
+                generated,
+                "",
+                opening,
+                "",
+                watching,
+                "",
+                silence,
+                "",
+                naming,
+                "",
+                fenced(help),
+            ].join("\n"),
+            version,
+        ),
         snippet: [
             "## margin (markdown review threads)",
             "",

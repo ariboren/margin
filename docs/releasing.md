@@ -29,10 +29,11 @@ Do these in order. Trusted publishing needs the package to exist on npm, and pro
 
 ## Cutting a release
 
-1. Bump the version and commit it:
+1. Bump the version, regenerate the skill and commit both. The skill ends with a stamp naming the version, so `bun skill/generate.ts --check` fails in CI until it is regenerated:
 
     ```sh
     npm version 0.1.0 --no-git-tag-version
+    bun run skill
     git commit -am "Release 0.1.0"
     git push
     ```

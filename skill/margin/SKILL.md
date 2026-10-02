@@ -41,3 +41,5 @@ Acks: ok c3 replied|resolved;
 err c3 <reason>[; detail]: not-found|resolved|deleted|detached|no-anchor|not-unique|before-missing|locked.
 Id commands find the doc; on "pass the doc: a.md": margin reply a.md c3 "…".
 ```
+
+<!-- margin-skill 0.3.0 8a3f4aef1c64 -->
