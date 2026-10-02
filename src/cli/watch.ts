@@ -14,7 +14,7 @@ import {
 } from "../core/model.ts";
 import { LockTimeoutError } from "../core/lock.ts";
 import { readLog, sidecar, transact } from "../core/log.ts";
-import { withPresence } from "../server/presence.ts";
+import { holdPresence, withPresence } from "../server/presence.ts";
 import {
     applyEvent,
     emptyState,
@@ -214,7 +214,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  */
 export class WakeTail {
     private offset = 0;
-    private readonly state = emptyState();
+    private state = emptyState();
     private lastWakeSeq = 0;
     private first: number | undefined;
     private last: number | undefined;
@@ -227,27 +227,48 @@ export class WakeTail {
     ) {}
 
     async next(): Promise<boolean> {
-        const debounce = this.options.debounceMs ?? DEBOUNCE_MS;
-        const maxWait = this.options.maxWaitMs ?? MAX_WAIT_MS;
         const { signal } = this.options;
-        const log = sidecar(this.docPath).log;
         while (!signal?.aborted) {
-            if (!this.started || fileSize(log) !== this.offset) await this.read();
-            const now = Date.now();
-            let wait = POLL_MS;
-            if (this.lastWakeSeq <= this.state.cursors[this.stream]) {
-                this.first = this.last = undefined;
-            } else if (this.first !== undefined && this.last !== undefined) {
-                const due = Math.min(this.last + debounce, this.first + maxWait);
-                if (now >= due) {
-                    this.first = this.last = undefined;
-                    return true;
-                }
-                wait = Math.min(POLL_MS, due - now);
-            }
+            const wait = await this.poll();
+            if (wait === 0) return true;
             await sleep(wait, signal);
         }
         return false;
+    }
+
+    /**
+     * Reads what the log gained and answers 0 once a batch is due, else how long to sleep before
+     * asking again. A watch over several docs polls each tail in turn rather than block on one.
+     */
+    async poll(): Promise<number> {
+        const debounce = this.options.debounceMs ?? DEBOUNCE_MS;
+        const maxWait = this.options.maxWaitMs ?? MAX_WAIT_MS;
+        const size = fileSize(sidecar(this.docPath).log);
+        // A log shorter than what was read is a new one (the sidecar was deleted): its seqs
+        // start over, so the fold does too.
+        if (size < this.offset) this.reset();
+        if (!this.started || size !== this.offset) await this.read();
+        if (this.lastWakeSeq <= this.state.cursors[this.stream]) {
+            this.first = this.last = undefined;
+        } else if (this.first !== undefined && this.last !== undefined) {
+            const now = Date.now();
+            const due = Math.min(this.last + debounce, this.first + maxWait);
+            if (now >= due) {
+                this.first = this.last = undefined;
+                return 0;
+            }
+            return Math.min(POLL_MS, due - now);
+        }
+        return POLL_MS;
+    }
+
+    /** Forgets what was read, so the next poll reads the log whole and a backlog is due at once. */
+    reset(): void {
+        this.offset = 0;
+        this.state = emptyState();
+        this.lastWakeSeq = 0;
+        this.first = this.last = undefined;
+        this.started = false;
     }
 
     private async read(): Promise<void> {
@@ -307,4 +328,71 @@ export async function watch(
                 return;
         }
     });
+}
+
+export interface SessionWatchOptions extends WaitOptions {
+    once?: boolean;
+    agent?: AgentIdentity;
+    /** How a line names its doc, in a form the agent can pass back to `margin pending`. */
+    name?: (docPath: string) => string;
+}
+
+interface Followed {
+    tail: WakeTail;
+    release: () => void;
+}
+
+/**
+ * One watch over every doc `docs` returns, asked again on each pass, so a doc the session opens
+ * later joins and one whose file is gone leaves. Each doc keeps its own tail, cursor and presence
+ * entry, as if it had a watch of its own. A line leads with its doc while more than one is
+ * followed. Runs until aborted, or after the first printed batch with `once`; with no docs it
+ * waits for one.
+ */
+export async function watchSession(
+    docs: () => string[],
+    write: (text: string) => void,
+    options: SessionWatchOptions = {},
+): Promise<void> {
+    const { signal, agent } = options;
+    const name = options.name ?? ((docPath: string) => docPath);
+    const followed = new Map<string, Followed>();
+    try {
+        while (!signal?.aborted) {
+            const current = new Set(docs());
+            for (const [doc, entry] of followed) {
+                if (current.has(doc)) continue;
+                entry.release();
+                followed.delete(doc);
+            }
+            for (const doc of current) {
+                if (followed.has(doc)) continue;
+                followed.set(doc, {
+                    tail: new WakeTail(doc, "watch", options),
+                    release: holdPresence(doc, agent ?? UNKNOWN_AGENT),
+                });
+            }
+            let wait = POLL_MS;
+            for (const [doc, { tail }] of followed) {
+                try {
+                    const due = await tail.poll();
+                    if (due > 0) {
+                        wait = Math.min(wait, due);
+                        continue;
+                    }
+                    const lead = followed.size > 1 ? `${name(doc)}: ` : "";
+                    const print = (text: string) => write(lead + text);
+                    if ((await emitRetrying(doc, print, signal, agent)) && options.once) return;
+                } catch (error) {
+                    if (typeof (error as NodeJS.ErrnoException).code !== "string") throw error;
+                    // The doc or its sidecar went away mid-read. The other docs carry on, and
+                    // this one is read afresh on the next pass: its cursor is in its log.
+                    tail.reset();
+                }
+            }
+            await sleep(wait, signal);
+        }
+    } finally {
+        for (const entry of followed.values()) entry.release();
+    }
 }

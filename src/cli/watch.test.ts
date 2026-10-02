@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { join } from "node:path";
-import { readLog } from "../core/log.ts";
-import type { Event, EventInput } from "../core/model.ts";
-import { foldLog } from "../core/threads.ts";
-import { sandbox, type Sandbox } from "./testing.ts";
-import { DEBOUNCE_MS, docWake, emitWatch, wakeReason, watch } from "./watch.ts";
+import { rmSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import { createAnchor } from "../core/anchor.ts";
+import { readLog, sidecar } from "../core/log.ts";
+import type { AgentIdentity, Event, EventInput } from "../core/model.ts";
+import { createThread, foldLog } from "../core/threads.ts";
+import { isFile } from "../server/doc-location.ts";
+import { connectedAgents } from "../server/presence.ts";
+import { DOC, sandbox, type Sandbox } from "./testing.ts";
+import { DEBOUNCE_MS, docWake, emitWatch, wakeReason, watch, watchSession } from "./watch.ts";
 
 let box: Sandbox;
 
@@ -444,5 +448,203 @@ describe("re-arming", () => {
         await running;
         expect(firstSeen).toBeDefined();
         expect(firstSeen! - started).toBeLessThan(1_500);
+    });
+});
+
+describe("one watch over a session's docs", () => {
+    const FOREMAN: AgentIdentity = { name: "foreman", client: "claude-code" };
+    let docs: string[];
+    let stop: AbortController;
+
+    beforeEach(() => {
+        docs = [box.doc];
+        stop = new AbortController();
+    });
+
+    afterEach(() => {
+        stop.abort();
+    });
+
+    function another(name: string): string {
+        const path = join(box.dir, name);
+        writeFileSync(path, DOC);
+        return path;
+    }
+
+    async function commentOn(doc: string, exact: string, text: string): Promise<void> {
+        const start = DOC.indexOf(exact);
+        const anchor = createAnchor(DOC, { start, end: start + exact.length });
+        await createThread(doc, (next) => [
+            { type: "comment", by: "user", id: next, anchor, text, draft: false },
+        ]);
+    }
+
+    function start(out: ReturnType<typeof collect>, options: { debounceMs?: number } = {}) {
+        return watchSession(() => docs.filter(isFile), out.write, {
+            debounceMs: 0,
+            ...options,
+            signal: stop.signal,
+            agent: FOREMAN,
+            name: basename,
+        });
+    }
+
+    async function until(check: () => boolean, what: string): Promise<void> {
+        const deadline = Date.now() + 5_000;
+        while (!check()) {
+            if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+            await Bun.sleep(10);
+        }
+    }
+
+    test("a single doc prints what a watch naming it prints", async () => {
+        const out = collect();
+        const running = start(out);
+        await box.comment("cold path", "One");
+        await until(() => out.lines.length === 1, "the line");
+        stop.abort();
+        await running;
+        expect(out.lines).toEqual(['new c1 "Findings"\n']);
+    });
+
+    test("with several docs each line leads with its doc, one line per doc's batch", async () => {
+        const other = another("other.md");
+        docs = [box.doc, other];
+        const out = collect();
+        const running = start(out);
+        await box.comment("cold path", "One");
+        await until(() => out.lines.length === 1, "the first doc's line");
+        await commentOn(other, "Retry queue", "Two");
+        await commentOn(other, "cold path", "Three");
+        await until(() => out.lines.join("").includes("c2"), "the second doc's line");
+        stop.abort();
+        await running;
+        expect(out.lines[0]).toBe('doc.md: new c1 "Findings"\n');
+        expect(out.lines.slice(1).join("")).toMatch(/^other\.md: new c1/);
+        expect(out.lines.every((line) => /^(doc|other)\.md: /.test(line))).toBe(true);
+    });
+
+    test("a doc opened after the watch started joins it, backlog included, and is shown connected", async () => {
+        const out = collect();
+        const running = start(out);
+        await until(() => connectedAgents(box.doc).length === 1, "presence on the first doc");
+        const later = another("later.md");
+        await commentOn(later, "cold path", "Waiting before the watch knew the doc");
+        expect(connectedAgents(later)).toEqual([]);
+        docs = [box.doc, later];
+        await until(() => out.lines.length === 1, "the backlog line");
+        expect(out.lines).toEqual(['later.md: new c1 "Findings"\n']);
+        expect(connectedAgents(later)).toEqual([FOREMAN]);
+        expect(connectedAgents(box.doc)).toEqual([FOREMAN]);
+        stop.abort();
+        await running;
+        expect(connectedAgents(later)).toEqual([]);
+        expect(connectedAgents(box.doc)).toEqual([]);
+    });
+
+    test("with no docs it waits for the first", async () => {
+        docs = [];
+        const out = collect();
+        const running = start(out);
+        await Bun.sleep(300);
+        await box.comment("cold path", "One");
+        docs = [box.doc];
+        await until(() => out.lines.length === 1, "the line");
+        stop.abort();
+        await running;
+        expect(out.lines).toEqual(['new c1 "Findings"\n']);
+    });
+
+    test("a doc whose file is deleted leaves the watch; the others carry on unprefixed", async () => {
+        const other = another("other.md");
+        docs = [box.doc, other];
+        const out = collect();
+        const running = start(out);
+        await until(() => connectedAgents(other).length === 1, "presence on the second doc");
+        rmSync(other);
+        await until(() => connectedAgents(other).length === 0, "the deleted doc to leave");
+        await box.comment("cold path", "One");
+        await until(() => out.lines.length === 1, "the line");
+        stop.abort();
+        await running;
+        expect(out.lines).toEqual(['new c1 "Findings"\n']);
+    });
+
+    test("a doc whose sidecar is deleted mid-watch starts over; nothing stops", async () => {
+        const other = another("other.md");
+        docs = [box.doc, other];
+        const out = collect();
+        const running = start(out);
+        await box.comment("cold path", "One");
+        await until(() => out.lines.length === 1, "the first line");
+        rmSync(sidecar(box.doc).dir, { recursive: true, force: true });
+        await Bun.sleep(400);
+        await box.comment("Retry queue", "Into a new log");
+        await commentOn(other, "cold path", "Elsewhere");
+        await until(() => out.lines.length === 3, "both docs' lines");
+        stop.abort();
+        await running;
+        expect(out.lines.slice(1).sort()).toEqual([
+            'doc.md: new c1 "Findings"\n',
+            'other.md: new c1 "Findings"\n',
+        ]);
+    });
+
+    test("--once ends the watch at the first printed batch, whichever doc it is", async () => {
+        const other = another("other.md");
+        docs = [box.doc, other];
+        await commentOn(other, "cold path", "One");
+        const out = collect();
+        await watchSession(() => docs, out.write, { debounceMs: 0, once: true, name: basename });
+        expect(out.lines).toEqual(['other.md: new c1 "Findings"\n']);
+    });
+
+    test("stopped before it emits it loses nothing; the re-armed watch prints each doc's batch once", async () => {
+        const other = another("other.md");
+        docs = [box.doc, other];
+        const first = collect();
+        const running = start(first, { debounceMs: 60_000 });
+        await Bun.sleep(200);
+        await box.comment("cold path", "One");
+        await commentOn(other, "cold path", "Two");
+        await Bun.sleep(400);
+        stop.abort();
+        await running;
+        expect(first.lines).toEqual([]);
+
+        stop = new AbortController();
+        const second = collect();
+        const rearmed = start(second);
+        await until(() => second.lines.length === 2, "both backlogs");
+        await Bun.sleep(400);
+        stop.abort();
+        await rearmed;
+        expect([...second.lines].sort()).toEqual([
+            'doc.md: new c1 "Findings"\n',
+            'other.md: new c1 "Findings"\n',
+        ]);
+    });
+
+    test("a session watch and a watch naming one of its docs print each batch once between them", async () => {
+        const other = another("other.md");
+        docs = [box.doc, other];
+        const session = collect();
+        const named = collect();
+        const running = [
+            start(session, { debounceMs: 100 }),
+            watch(other, named.write, { debounceMs: 100, signal: stop.signal }),
+        ];
+        await Bun.sleep(200);
+        await commentOn(other, "cold path", "One");
+        await Bun.sleep(800);
+        await commentOn(other, "Retry queue", "Two");
+        await box.comment("cold path", "Three");
+        await Bun.sleep(800);
+        stop.abort();
+        await Promise.all(running);
+        const all = [...session.lines, ...named.lines].join("");
+        expect(all.match(/new c1 /g)).toHaveLength(2);
+        expect(all.match(/new c2 /g)).toHaveLength(1);
+        expect(session.lines.filter((line) => line.startsWith("doc.md: "))).toHaveLength(1);
     });
 });

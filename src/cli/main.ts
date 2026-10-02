@@ -10,13 +10,14 @@ import { LockTimeoutError } from "../core/lock.ts";
 import type { Ack, ThreadId } from "../core/model.ts";
 import type { Env } from "../server/open-tab.ts";
 import { reply, resolveThread, show, suggest } from "./commands.ts";
-import { isThreadId, resolveDoc, type DocTarget } from "./doc.ts";
+import { cwdRoot, docName, isThreadId, resolveDoc, type DocTarget } from "./doc.ts";
 import { formatAck, formatShow } from "./format.ts";
-import { resolveAgent } from "./identity.ts";
+import { resolveAgent, sessionKey } from "./identity.ts";
 import { pending, pendingWait } from "./pending.ts";
-import { recordDoc } from "./registry.ts";
+import { recordDoc, sessionDocs } from "./registry.ts";
 import { setup } from "./setup.ts";
-import { watch } from "./watch.ts";
+import { isFile } from "../server/doc-location.ts";
+import { watch, watchSession } from "./watch.ts";
 
 export interface Io {
     cwd: string;
@@ -92,6 +93,14 @@ function waitOptions(io: Io) {
     };
 }
 
+/**
+ * `margin watch` with no doc named, by argument or `MARGIN_DOC`, follows every doc the agent
+ * session has opened. Without a session it is the one recent doc under cwd, as before.
+ */
+function followsSession(args: string[], env: Env): boolean {
+    return args[0] === undefined && !env.MARGIN_DOC && sessionKey(env) !== undefined;
+}
+
 export async function run(argv: string[], io: Io, server?: ServerCommands): Promise<number> {
     let parsed;
     try {
@@ -120,6 +129,16 @@ export async function run(argv: string[], io: Io, server?: ServerCommands): Prom
                 return await setup(io, { user: values.user, force: values.force });
             case "watch":
             case "pending": {
+                if (command === "watch" && followsSession(rest, io.env)) {
+                    const root = cwdRoot(io.cwd);
+                    await watchSession(() => sessionDocs(io.env).filter(isFile), write, {
+                        ...waitOptions(io),
+                        once: values.once,
+                        agent: resolveAgent({ as: values.as, env: io.env }),
+                        name: (doc) => docName(doc, root),
+                    });
+                    return 0;
+                }
                 const target = await resolveDoc({ explicit: rest[0], cwd: io.cwd, env: io.env });
                 if (!target.ok) return docFailure(io, target);
                 await recordDoc(target.path, io.env);

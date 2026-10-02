@@ -14,6 +14,7 @@ import {
     type Io,
     type ServerCommands,
 } from "./main.ts";
+import { recordDoc } from "./registry.ts";
 import { DOC, sandbox, type Sandbox } from "./testing.ts";
 
 const MAIN = join(import.meta.dir, "main.ts");
@@ -149,6 +150,112 @@ describe("every contract command against a temp dir with no daemon", () => {
         expect(margin(["reply", "c1", "Hi"], { env: { MARGIN_DOC: box.doc } }).stdout).toBe(
             "ok c1 replied\n",
         );
+    });
+
+    describe("watch with no doc named", () => {
+        function second(): string {
+            mkdirSync(join(box.dir, "b"));
+            const path = join(box.dir, "b", "doc.md");
+            copyFileSync(box.doc, path);
+            return path;
+        }
+
+        async function commentOn(doc: string, text: string): Promise<void> {
+            await createThread(doc, (id) => [
+                {
+                    type: "comment",
+                    by: "user",
+                    id,
+                    anchor: createAnchor(DOC, { start: 0, end: 7 }),
+                    text,
+                    draft: false,
+                },
+            ]);
+        }
+
+        test("follows every doc the session opened and names each by its path from cwd", async () => {
+            const other = second();
+            box.env.MARGIN_SESSION = "one";
+            await box.cli(["pending", "doc.md"]);
+            await box.cli(["pending", "b/doc.md"]);
+            await commentOn(other, "B");
+            expect(await box.cli(["watch", "--once"])).toEqual({
+                code: 0,
+                stdout: "b/doc.md: new c1\n",
+            });
+            await box.comment("cold path", "A");
+            expect((await box.cli(["watch", "--once"])).stdout).toBe('doc.md: new c1 "Findings"\n');
+        });
+
+        test("another session's docs are not followed", async () => {
+            const other = second();
+            box.env.MARGIN_SESSION = "one";
+            await box.cli(["pending", "doc.md"]);
+            box.env.MARGIN_SESSION = "two";
+            await box.cli(["pending", "b/doc.md"]);
+            await box.comment("cold path", "A");
+            await commentOn(other, "B");
+            expect((await box.cli(["watch", "--once"])).stdout).toBe("new c1\n");
+        });
+
+        test("MARGIN_DOC still names the one doc", async () => {
+            const other = second();
+            box.env.MARGIN_SESSION = "one";
+            await box.cli(["pending", "doc.md"]);
+            await box.cli(["pending", "b/doc.md"]);
+            await commentOn(other, "B");
+            await box.comment("cold path", "A");
+            box.env.MARGIN_DOC = box.doc;
+            expect((await box.cli(["watch", "--once"])).stdout).toBe('new c1 "Findings"\n');
+        });
+
+        test("without a session it is the one recent doc under cwd, or an error naming them", async () => {
+            const other = second();
+            await box.cli(["pending", "doc.md"]);
+            await box.comment("cold path", "A");
+            expect((await box.cli(["watch", "--once"])).stdout).toBe('new c1 "Findings"\n');
+            await box.cli(["pending", "b/doc.md"]);
+            await commentOn(other, "B");
+            expect(await box.cli(["watch", "--once"])).toEqual({
+                code: 1,
+                stdout: "err not-unique; pass the doc: b/doc.md doc.md\n",
+            });
+        });
+
+        test("a dozen docs: connected on each, no listener warning, all released on SIGTERM", async () => {
+            const env = { ...process.env, ...box.env, MARGIN_SESSION: "many" };
+            const docs: string[] = [];
+            for (let i = 0; i < 12; i++) {
+                const path = join(box.dir, `d${i}.md`);
+                copyFileSync(box.doc, path);
+                docs.push(path);
+                await recordDoc(path, env);
+            }
+            const watcher = Bun.spawn(["bun", MAIN, "watch", "--as", "foreman"], {
+                cwd: box.dir,
+                env,
+                stdout: "pipe",
+                stderr: "pipe",
+            });
+            try {
+                const connected = () => docs.every((doc) => connectedAgents(doc).length === 1);
+                const deadline = Date.now() + 20_000;
+                while (!connected() && Date.now() < deadline) await Bun.sleep(50);
+                expect(connected()).toBe(true);
+                await commentOn(docs[7]!, "B");
+                const reader = watcher.stdout.getReader();
+                const { value } = await reader.read();
+                reader.releaseLock();
+                expect(new TextDecoder().decode(value)).toBe("d7.md: new c1\n");
+                watcher.kill("SIGTERM");
+                await watcher.exited;
+                expect(watcher.signalCode).toBe("SIGTERM");
+                expect(await new Response(watcher.stderr).text()).toBe("");
+                expect(docs.flatMap((doc) => connectedAgents(doc))).toEqual([]);
+            } finally {
+                watcher.kill("SIGKILL");
+            }
+        }, 30_000);
     });
 
     test("an id held by several recent docs asks for the doc", async () => {

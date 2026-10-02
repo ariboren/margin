@@ -95,6 +95,21 @@ function isUnder(path: string, dir: string): boolean {
     return path.startsWith(dir.endsWith(sep) ? dir : dir + sep);
 }
 
+/** `cwd` with symlinks resolved, as recorded doc paths are. */
+export function cwdRoot(cwd: string): string {
+    const root = resolve(cwd);
+    try {
+        return realpathSync(root);
+    } catch {
+        return root;
+    }
+}
+
+/** The doc as a command run from `root` can name it: relative under it, absolute elsewhere. */
+export function docName(doc: string, root: string): string {
+    return isUnder(doc, root) ? relative(root, doc) : doc;
+}
+
 /** Candidate docs named in one error; the registry holds far more than an error line should. */
 const NAMED_MAX = 3;
 
@@ -130,13 +145,8 @@ export async function resolveDoc(input: {
     if (explicit !== undefined) return existing(resolve(cwd, explicit), explicit);
     if (env.MARGIN_DOC) return existing(resolve(cwd, env.MARGIN_DOC), env.MARGIN_DOC);
 
-    let root = resolve(cwd);
-    try {
-        root = realpathSync(root);
-    } catch {
-        // Keep the given path.
-    }
-    const name = (doc: string) => (isUnder(doc, root) ? relative(root, doc) : doc);
+    const root = cwdRoot(cwd);
+    const name = (doc: string) => docName(doc, root);
     const one = (doc: string) => existing(doc, name(doc));
     const fail = (error: "not-unique" | "not-found", docs: string[]): DocTarget => ({
         ok: false,

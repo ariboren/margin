@@ -67,9 +67,14 @@ function titleField(line: string, type: string, field: string): string | undefin
     }
 }
 
-export function sessionTitle(env: Env): string | undefined {
+export function claudeSessionId(env: Env): string | undefined {
     const sessionId = env.CLAUDE_CODE_SESSION_ID;
-    if (sessionId === undefined || !SESSION_ID.test(sessionId)) return undefined;
+    return sessionId !== undefined && SESSION_ID.test(sessionId) ? sessionId : undefined;
+}
+
+export function sessionTitle(env: Env): string | undefined {
+    const sessionId = claudeSessionId(env);
+    if (sessionId === undefined) return undefined;
     const tail = transcriptTail(env, sessionId);
     if (tail === undefined) return undefined;
     const lines = tail.split("\n").reverse();

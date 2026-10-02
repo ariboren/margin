@@ -5,7 +5,7 @@
 import { cleanName, clientName } from "../core/agent.ts";
 import type { AgentClient, AgentIdentity } from "../core/model.ts";
 import type { Env } from "../server/open-tab.ts";
-import { sessionTitle } from "./claude-session.ts";
+import { claudeSessionId, sessionTitle } from "./claude-session.ts";
 
 /**
  * Claude Code first: it sets `CLAUDECODE` in every subprocess, and when it runs inside Cursor's
@@ -27,4 +27,19 @@ export function resolveAgent(input: { as?: string | undefined; env: Env }): Agen
         (client === "claude-code" ? cleanName(sessionTitle(input.env)) : undefined) ??
         clientName(client);
     return { name, client };
+}
+
+/**
+ * The agent session a command runs in, which is what `margin watch` with no path follows:
+ * `MARGIN_SESSION` for an agent that names its own, else the id Claude Code or Codex gives its
+ * subprocesses. Undefined for anything else: a list shared by every such agent on the machine
+ * would hand one session's batches to another's watch.
+ */
+export function sessionKey(env: Env): string | undefined {
+    const named = env.MARGIN_SESSION?.trim();
+    if (named) return `margin:${named}`;
+    const claude = claudeSessionId(env);
+    if (claude !== undefined) return `claude-code:${claude.toLowerCase()}`;
+    const codex = env.CODEX_THREAD_ID?.trim();
+    return codex ? `codex:${codex}` : undefined;
 }

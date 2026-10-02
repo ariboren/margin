@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectClient, resolveAgent } from "./identity.ts";
+import { detectClient, resolveAgent, sessionKey } from "./identity.ts";
 
 describe("detectClient", () => {
     test("each client's marker, Claude Code first when nested", () => {
@@ -104,6 +104,33 @@ describe("Claude Code session title", () => {
         ).toBe("Claude Code");
         expect(resolveAgent({ env: { ...untitled, HOME: "/nonexistent-margin-home" } }).name).toBe(
             "Claude Code",
+        );
+    });
+});
+
+describe("sessionKey", () => {
+    const CLAUDE = "0a1b2c3d-0000-4000-8000-0123456789ab";
+
+    test("MARGIN_SESSION, then the Claude Code session, then the Codex thread", () => {
+        const env = {
+            MARGIN_SESSION: "mine",
+            CLAUDE_CODE_SESSION_ID: CLAUDE,
+            CODEX_THREAD_ID: "t1",
+        };
+        expect(sessionKey(env)).toBe("margin:mine");
+        expect(sessionKey({ ...env, MARGIN_SESSION: " " })).toBe(`claude-code:${CLAUDE}`);
+        expect(sessionKey({ CODEX_THREAD_ID: "t1" })).toBe("codex:t1");
+    });
+
+    test("no id, or a Claude Code id of the wrong shape, is no session", () => {
+        expect(sessionKey({})).toBeUndefined();
+        expect(sessionKey({ CLAUDECODE: "1", CURSOR_AGENT: "1" })).toBeUndefined();
+        expect(sessionKey({ CLAUDE_CODE_SESSION_ID: "../x" })).toBeUndefined();
+    });
+
+    test("a name and an id that spell the same are different sessions", () => {
+        expect(sessionKey({ MARGIN_SESSION: CLAUDE })).not.toBe(
+            sessionKey({ CLAUDE_CODE_SESSION_ID: CLAUDE }),
         );
     });
 });
