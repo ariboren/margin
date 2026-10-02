@@ -11,7 +11,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentIdentity } from "../core/model.ts";
-import { connectedAgents, legacyWatcherFile, watchersDir, withPresence } from "./presence.ts";
+import {
+    connectedAgents,
+    holdPresence,
+    legacyWatcherFile,
+    watchersDir,
+    withPresence,
+} from "./presence.ts";
 
 const FOREMAN: AgentIdentity = { name: "foreman", client: "claude-code" };
 const UNKNOWN: AgentIdentity = { name: "Agent", client: "unknown" };
@@ -69,7 +75,11 @@ async function deadPid(): Promise<number> {
 type Watcher = ReturnType<typeof spawnWatch>;
 
 function spawnWatch(args: readonly string[] = ["watch"]) {
-    return Bun.spawn(["bun", CLI, ...args, doc], { stdout: "ignore", stderr: "ignore" });
+    return Bun.spawn(["bun", CLI, ...args, doc], {
+        env: { ...process.env, MARGIN_STATE_DIR: join(dir, "state") },
+        stdout: "ignore",
+        stderr: "ignore",
+    });
 }
 
 /** Waits until the watcher has registered, failing fast if it exits first. */
@@ -179,6 +189,28 @@ describe("presence", () => {
         releaseFirst();
         await first;
         expect(agentWatching(doc)).toBe(false);
+    });
+
+    test("many docs held at once share one set of process listeners", () => {
+        const signals = ["SIGINT", "SIGTERM", "SIGHUP", "exit"] as const;
+        const count = () => signals.map((signal) => process.listenerCount(signal));
+        const before = count();
+        const docs = Array.from({ length: 12 }, (_, index) => {
+            const path = join(dir, `doc-${index}.md`);
+            writeFileSync(path, "# Doc\n");
+            return path;
+        });
+        const releases = docs.map((path) => holdPresence(path, FOREMAN));
+        expect(count()).toEqual(before.map((listeners) => listeners + 1));
+        expect(docs.map((path) => connectedAgents(path))).toEqual(docs.map(() => [FOREMAN]));
+        releases[0]!();
+        releases[0]!();
+        expect(connectedAgents(docs[0]!)).toEqual([]);
+        expect(connectedAgents(docs[1]!)).toEqual([FOREMAN]);
+        expect(count()).toEqual(before.map((listeners) => listeners + 1));
+        for (const release of releases) release();
+        expect(count()).toEqual(before);
+        expect(docs.flatMap((path) => connectedAgents(path))).toEqual([]);
     });
 
     test("a dead pid's entry reads false and is pruned", async () => {

@@ -121,38 +121,51 @@ const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 /** Tells apart overlapping registrations from one process, so one release never drops another. */
 let registrations = 0;
 
-/**
- * Registers this process as `agent` for the life of `run`, best effort. A signal removes the
- * entry and then re-raises, so the default exit still happens; SIGKILL leaves a stale entry, which
- * the pid check prunes. Release removes only this registration's own entry.
- */
-export async function withPresence<T>(
-    docPath: string,
-    agent: AgentIdentity,
-    run: () => Promise<T>,
-): Promise<T> {
-    const dir = watchersDir(docPath);
-    const name = `${process.pid}-${registrations++}`;
-    const entry = join(dir, name);
-    // The directory stays: removing it when empty would race a sibling about to register.
-    const release = () => remove(entry);
-    const onSignal = (signal: NodeJS.Signals) => {
-        detach();
-        release();
-        process.kill(process.pid, signal);
-    };
-    const detach = () => {
-        for (const signal of SIGNALS) {
-            process.off(signal, onSignal);
-        }
-        process.off("exit", release);
-    };
-    // Handlers first: once the entry is visible, a signal must already find them, or the default
-    // exit would leave it behind.
+/** The entry files this process holds, across every doc it watches. */
+const held = new Set<string>();
+
+function releaseAll(): void {
+    for (const entry of held) {
+        remove(entry);
+    }
+    held.clear();
+}
+
+function onSignal(signal: NodeJS.Signals): void {
+    detach();
+    releaseAll();
+    process.kill(process.pid, signal);
+}
+
+function attach(): void {
     for (const signal of SIGNALS) {
         process.on(signal, onSignal);
     }
-    process.on("exit", release);
+    process.on("exit", releaseAll);
+}
+
+function detach(): void {
+    for (const signal of SIGNALS) {
+        process.off(signal, onSignal);
+    }
+    process.off("exit", releaseAll);
+}
+
+/**
+ * Registers this process as `agent` on the doc, best effort, until the returned release is
+ * called. A signal removes every entry this process holds and then re-raises, so the default exit
+ * still happens; SIGKILL leaves stale entries, which the pid check prunes. Release removes only
+ * this registration's own entry. One set of process listeners serves every registration: a watch
+ * over many docs must not add its own per doc.
+ */
+export function holdPresence(docPath: string, agent: AgentIdentity): () => void {
+    const dir = watchersDir(docPath);
+    const name = `${process.pid}-${registrations++}`;
+    const entry = join(dir, name);
+    // Handlers first: once the entry is visible, a signal must already find them, or the default
+    // exit would leave it behind.
+    if (held.size === 0) attach();
+    held.add(entry);
     try {
         // Only beside a doc that exists: never create `.margin/` for a mistyped or deleted path.
         if (existsSync(sidecar(docPath).doc)) {
@@ -166,10 +179,27 @@ export async function withPresence<T>(
     } catch {
         // Presence is a courtesy to the page; the watcher works without it.
     }
+    let released = false;
+    // The directory stays: removing it when empty would race a sibling about to register.
+    return () => {
+        if (released) return;
+        released = true;
+        remove(entry);
+        held.delete(entry);
+        if (held.size === 0) detach();
+    };
+}
+
+/** Holds presence on the doc for the life of `run`. */
+export async function withPresence<T>(
+    docPath: string,
+    agent: AgentIdentity,
+    run: () => Promise<T>,
+): Promise<T> {
+    const release = holdPresence(docPath, agent);
     try {
         return await run();
     } finally {
-        detach();
         release();
     }
 }
