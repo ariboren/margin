@@ -23,8 +23,12 @@ import type {
     VerdictState,
 } from "../core/model.ts";
 
-/** Bumped on any incompatible wire change; a CLI refuses a daemon that speaks another. */
-export const PROTOCOL_VERSION = 1;
+/**
+ * Bumped on any incompatible wire change, and when the page needs routes an older daemon lacks:
+ * a daemon serves the page from disk, so one left running across an upgrade would serve a page
+ * it cannot answer. A CLI replaces a daemon that speaks another.
+ */
+export const PROTOCOL_VERSION = 2;
 
 /**
  * The per-daemon token. Pages get it in the tab URL query (`?t=`), then send it as
