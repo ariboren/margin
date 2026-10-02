@@ -133,7 +133,9 @@ let page: DaemonStorage | null | undefined;
 
 /** Looked up on first use, which main.tsx makes before the first paint. */
 function daemon(): DaemonStorage | null {
-    page ??= fromPage();
+    if (page === undefined) {
+        page = fromPage();
+    }
     return page;
 }
 

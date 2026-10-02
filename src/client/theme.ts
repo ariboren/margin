@@ -28,14 +28,15 @@ export function applyTheme(choice: ThemeChoice): void {
 
 export function useTheme(): { dark: boolean; toggle: () => void } {
     const [choice, setChoice] = useState<ThemeChoice>(readChoice);
-    const loaded = useRef(choice);
+    const stored = useRef(choice);
     const systemDark = useMedia("(prefers-color-scheme: dark)");
 
     useEffect(() => {
         applyTheme(choice);
         // Only a change is stored: the mockup's preset theme is not the viewer's choice.
-        if (choice !== loaded.current) {
+        if (choice !== stored.current) {
             remember(storageKey, choice);
+            stored.current = choice;
         }
     }, [choice]);
 
