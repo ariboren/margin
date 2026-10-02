@@ -218,7 +218,9 @@ describe("every contract command against a temp dir with no daemon", () => {
             expect((await box.cli(["watch", "--once"])).stdout).toBe(
                 `${onlyDoc("doc.md")}new c1 "Findings"\n`,
             );
-            expect(onlyDoc("doc.md")).toStartWith("only doc.md; set MARGIN_SESSION=");
+            expect(onlyDoc("doc.md")).toStartWith(
+                "only doc.md; for all docs: MARGIN_SESSION=<name> on every margin command",
+            );
             await box.cli(["pending", "b/doc.md"]);
             await commentOn(other, "B");
             expect(await box.cli(["watch", "--once"])).toEqual({

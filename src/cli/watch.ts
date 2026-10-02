@@ -342,7 +342,7 @@ export async function watch(
 
 /** Printed once when a session's doc list is removed under a running watch. */
 export const LIST_LOST =
-    "session doc list lost; run margin pending <doc> on each doc to keep it watched\n";
+    "session doc list lost; still watching, run margin pending <doc> on each doc to list it again\n";
 
 /** How often a session watch marks its list as in use, and looks after its presence entries. */
 const REFRESH_MS = 60 * 60 * 1000;
