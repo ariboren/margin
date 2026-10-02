@@ -134,7 +134,7 @@ export function chipStatusLine(model: AgentChipModel): string {
 
 /**
  * The page's only connection indicator: the agent's mark and name beside the filename, "+N" for
- * more, tinted by state. Amber when nobody is here (a click copies the message for your agent)
+ * more, tinted by state. Amber when nobody is here (a click copies a prompt for the agent)
  * or when a reply has stalled (the tooltip lists the threads); red when the daemon link is down.
  * Each change of state flashes a ring in the new colour.
  */

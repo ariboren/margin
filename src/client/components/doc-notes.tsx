@@ -97,7 +97,7 @@ export function DocNotes(props: DocNotesProps): JSX.Element {
         };
     }, [open]);
 
-    const label = live === 0 ? "Doc notes" : `Doc notes, ${live} open`;
+    const label = live === 0 ? "Doc comments" : `Doc comments, ${live} open`;
     return (
         <div class="doc-notes" ref={root}>
             {open ? <Panel {...props} notes={notes} /> : null}
@@ -111,7 +111,7 @@ export function DocNotes(props: DocNotesProps): JSX.Element {
                         onClick={open ? onClose : props.onOpen}
                     >
                         {busy || unseen ? <span class="doc-notes-dot" /> : null}
-                        <span>Doc notes</span>
+                        <span>Doc comments</span>
                         {live > 0 ? <span class="doc-notes-count">{live}</span> : null}
                     </button>
                 )}
@@ -137,13 +137,13 @@ function Panel(props: DocNotesProps & { notes: ReturnType<typeof docNotes> }): J
             ?.scrollIntoView({ block: "nearest" });
     }, [focus]);
     return (
-        <section class="doc-notes-panel" role="dialog" aria-label="Doc notes">
+        <section class="doc-notes-panel" role="dialog" aria-label="Doc comments">
             <header class="doc-notes-head">
-                <span>Doc notes</span>
+                <span>Doc comments</span>
                 <button
                     type="button"
                     class="icon-button"
-                    aria-label="Close doc notes"
+                    aria-label="Close doc comments"
                     onClick={props.onClose}
                 >
                     <CloseIcon />
@@ -152,8 +152,7 @@ function Panel(props: DocNotesProps & { notes: ReturnType<typeof docNotes> }): J
             <div class="doc-notes-list" ref={list}>
                 {notes.length === 0 ? (
                     <p class="doc-notes-empty">
-                        Notes on the doc as a whole, not tied to any text. The agent reads them like
-                        comments.
+                        Comment on the doc as a whole, not tied to any text.
                     </p>
                 ) : (
                     notes.map((note) => (
@@ -215,7 +214,7 @@ function NoteComposer({
                 ref={field}
                 class="reply-input"
                 rows={2}
-                placeholder="Note for the agent about the whole doc…"
+                placeholder="Comment for agent about the whole doc…"
                 value={text}
                 onInput={(event) => setText(event.currentTarget.value)}
                 onKeyDown={submitKeys(() => void submit(), onCancel)}
@@ -229,7 +228,7 @@ function NoteComposer({
                         disabled={!ready}
                         onClick={() => void submit()}
                     >
-                        {hold ? "Save draft" : "Add note"}
+                        {hold ? "Save draft" : "Add comment"}
                     </button>
                 </span>
             </div>

@@ -38,7 +38,7 @@ Tell the agent the doc is open in margin. Select a sentence, press `c`, type a q
 
 **Comments and suggestions.** Select text and press `c` to comment or `s` to suggest a replacement. The same two buttons appear above the selection. Threads sit in the margin beside the text they quote, folded to a header with their state (draft, open, agent notified, agent responding, replied or resolved) until you click one open. A thread the agent picked up but hasn't answered in 10 minutes is marked stalled. If the quoted text is deleted the thread is marked detached, and it reattaches when the text comes back. After a rewrite, "Resolve N detached threads" in the top bar clears them in one step.
 
-**Doc notes.** For a comment on the doc as a whole, open "Doc notes" at the bottom right or press `n`. Notes read like a chat with the agent and stay out of the margin. The agent gets them alongside your other threads and answers with a reply or an edit.
+**Doc comments.** For a comment on the doc as a whole, open "Doc comments" at the bottom right or press `n`. Doc comments read like a chat with the agent and stay out of the margin. The agent gets them alongside your other threads and answers with a reply or an edit.
 
 **Agent suggestions.** A proposed edit shows as an inline diff in the text. Accept writes it to the file and resolves the thread. Reject with a note sends the note back to the agent; reject without one resolves the thread.
 
@@ -68,7 +68,7 @@ Tell the agent the doc is open in margin. Select a sentence, press `c`, type a q
 | `s`                 | Suggest a replacement for the selection        |
 | `j` / `k`           | Next / previous thread                         |
 | `a` / `r`           | Accept / reject the active thread's suggestion |
-| `n`                 | Open or close doc notes                        |
+| `n`                 | Open or close doc comments                     |
 | `⌘↵` (`Ctrl+Enter`) | Send a comment or reply, save an edit          |
 | `⌘Z` / `⇧⌘Z`        | Undo / redo your own edits and thread actions  |
 | `Esc`               | Cancel, close a panel, or deselect the thread  |
@@ -93,7 +93,7 @@ margin watch review.md --as foreman
 MARGIN_AGENT=reviewer margin pending review.md
 ```
 
-The chip is green while an agent is watching, amber when none is or a reply has stalled, and red if the page loses the daemon. When an agent opens the doc itself, the chip names it in plain grey with "Connecting" until it starts watching, for up to a minute. With no agent connected, click it to copy a message that tells your agent to start watching the doc. The browser tab carries the same state as a coloured dot, which turns blue when a reply lands while you're in another tab, and the title counts them, as in "(2) review.md · margin".
+The chip is green while an agent is watching, amber when none is or a reply has stalled, and red if the page loses the daemon. When an agent opens the doc itself, the chip names it in plain grey with "Connecting" until it starts watching, for up to a minute. With no agent connected, click it to copy a prompt that tells the agent to start watching the doc. The browser tab carries the same state as a coloured dot, which turns blue when a reply lands while you're in another tab, and the title counts them, as in "(2) review.md · margin".
 
 **The loop.** Claude Code runs `margin watch` under its Monitor tool. It prints one line per batch of new comments. Agents without Monitor run `margin pending <doc> --wait` instead, which blocks until the next batch arrives.
 
