@@ -64,6 +64,8 @@ export const routes = {
     openFile: (docId: DocId) => `/api/docs/${docId}/open-file`,
     /** POST `OpenUrlRequest`: an http(s) link, for Orca's browser, which blocks popups. */
     openUrl: (docId: DocId) => `/api/docs/${docId}/open-url`,
+    /** POST `StoredChange`: what the page keeps on the device (settings, drafts). */
+    stored: (docId: DocId) => `/api/docs/${docId}/stored`,
     register: "/api/register",
     status: "/api/status",
     stop: "/api/stop",
@@ -117,6 +119,24 @@ export interface PageBoot {
     path: string;
     /** Relative to the doc's git repository root, else just the file name. */
     relativePath: string;
+    /**
+     * What the page stored before, for the device and for this doc, so settings apply before the
+     * first paint. Absent from a daemon older than the field, or one with nowhere to keep it; the
+     * page then keeps to browser storage.
+     */
+    stored?: Record<string, string>;
+}
+
+/**
+ * Keys stored once for the device. Every other key the page stores is filed under its doc, so
+ * two docs never share one and only this doc's come back with the page.
+ */
+export const DEVICE_KEYS = { view: "margin:view", theme: "margin:theme" } as const;
+
+/** Per-key, so two tabs never overwrite each other's keys. A key in both is deleted. */
+export interface StoredChange {
+    set?: Record<string, string>;
+    delete?: string[];
 }
 
 /** SSE event name for a `WireSnapshot` payload; the SSE `id` is its `version`. */

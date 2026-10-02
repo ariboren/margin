@@ -24,6 +24,28 @@ export function stateDir(env: Record<string, string | undefined> = process.env):
     return join(homedir(), ".cache", "margin");
 }
 
+/**
+ * Where what the page stores (settings, drafts) is kept. Not the state dir: `XDG_RUNTIME_DIR` is
+ * wiped at logout and `~/.cache` is fair game for a cleaner, and these must stay on the device.
+ */
+export function deviceDir(
+    env: Record<string, string | undefined> = process.env,
+    platform: string = process.platform,
+): string {
+    if (env.MARGIN_STATE_DIR) {
+        return env.MARGIN_STATE_DIR;
+    }
+    if (platform === "darwin") {
+        return join(homedir(), "Library", "Application Support", "margin");
+    }
+    return join(env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "margin");
+}
+
+/** The page store, 0600: it holds unsent drafts, which are the user's text. */
+export function pageStorePath(dir: string): string {
+    return join(dir, "page-store.json");
+}
+
 /** Creates the state dir as 0700 and refuses one that is a symlink or someone else's. */
 export function ensureStateDir(dir: string): string {
     mkdirSync(dir, { recursive: true, mode: 0o700 });

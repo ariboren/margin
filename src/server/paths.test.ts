@@ -3,7 +3,9 @@ import { mkdtempSync, rmSync, statSync, symlinkSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+    deviceDir,
     ensureStateDir,
+    pageStorePath,
     readDaemonInfo,
     removeDaemonInfo,
     stateDir,
@@ -28,6 +30,23 @@ describe("stateDir", () => {
         expect(stateDir({ MARGIN_STATE_DIR: "/x", XDG_RUNTIME_DIR: "/run" })).toBe("/x");
         expect(stateDir({ XDG_RUNTIME_DIR: "/run" })).toBe("/run/margin");
         expect(stateDir({})).toEndWith(join(".cache", "margin"));
+    });
+});
+
+describe("deviceDir", () => {
+    test("MARGIN_STATE_DIR wins; otherwise a per-user dir no logout wipes", () => {
+        expect(deviceDir({ MARGIN_STATE_DIR: "/x", XDG_STATE_HOME: "/state" }, "linux")).toBe("/x");
+        expect(deviceDir({ MARGIN_STATE_DIR: "/x" }, "darwin")).toBe("/x");
+        expect(deviceDir({ XDG_RUNTIME_DIR: "/run" }, "darwin")).toEndWith(
+            join("Library", "Application Support", "margin"),
+        );
+        expect(deviceDir({ XDG_RUNTIME_DIR: "/run", XDG_STATE_HOME: "/state" }, "linux")).toBe(
+            "/state/margin",
+        );
+        expect(deviceDir({ XDG_RUNTIME_DIR: "/run" }, "linux")).toEndWith(
+            join(".local", "state", "margin"),
+        );
+        expect(pageStorePath("/x")).toBe("/x/page-store.json");
     });
 });
 

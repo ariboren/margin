@@ -2,13 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { defaultPrefs, parsePrefs } from "./preferences.ts";
 
 describe("parsePrefs", () => {
-    test("nothing stored gives the defaults: large margins, outline shown, double click to edit", () => {
+    test("nothing stored gives the defaults: medium text and margins, double click to edit, resolved threads shown", () => {
         expect(parsePrefs({})).toEqual(defaultPrefs);
         expect(parsePrefs(null)).toEqual(defaultPrefs);
         expect(parsePrefs("junk")).toEqual(defaultPrefs);
-        expect(defaultPrefs.margins).toBe("lg");
-        expect(defaultPrefs.showOutline).toBe(true);
-        expect(defaultPrefs.editOn).toBe("dblclick");
+        expect(defaultPrefs).toEqual({
+            density: "md",
+            margins: "md",
+            editOn: "dblclick",
+            showMargin: true,
+            showOutline: true,
+            showResolved: true,
+        });
     });
 
     test("stored values win field by field", () => {
@@ -18,7 +23,7 @@ describe("parsePrefs", () => {
                 margins: "sm",
                 editOn: "click",
                 showOutline: false,
-                showResolved: true,
+                showResolved: false,
             }),
         ).toEqual({
             density: "sm",
@@ -26,7 +31,7 @@ describe("parsePrefs", () => {
             editOn: "click",
             showMargin: true,
             showOutline: false,
-            showResolved: true,
+            showResolved: false,
         });
     });
 
@@ -37,7 +42,7 @@ describe("parsePrefs", () => {
             density: 3,
             editOn: "tripleclick",
         });
-        expect(prefs.margins).toBe("lg");
+        expect(prefs.margins).toBe("md");
         expect(prefs.editOn).toBe("dblclick");
         expect(prefs.showOutline).toBe(true);
         expect(prefs.density).toBe("md");

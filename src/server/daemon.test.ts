@@ -15,7 +15,7 @@ import { startServer, type MarginServer } from "./daemon.ts";
 import { withPresence } from "./presence.ts";
 
 const FOREMAN = { name: "foreman", client: "claude-code" } as const;
-import { BOOT_ELEMENT, routes, type PageBoot, type WireSnapshot } from "./protocol.ts";
+import { BOOT_ELEMENT, DEVICE_KEYS, routes, type PageBoot, type WireSnapshot } from "./protocol.ts";
 
 const FIXTURES = join(import.meta.dir, "..", "..", "fixtures");
 
@@ -310,6 +310,131 @@ describe("page boot data", () => {
         const { html, boot } = await bootOf(url);
         expect(boot.relativePath).toBe("docs/</script>.md");
         expect(html.match(/<\/script>/g)?.length).toBe(2);
+    });
+});
+
+describe("what the page stores", () => {
+    const DRAFT = "an unsent reply </script><!-- only its writer may read";
+    let storeRoot: string;
+    let storing: MarginServer;
+
+    const start = async () =>
+        await startServer({ storePath: join(storeRoot, "state", "page-store.json") });
+    const bootOf = async (url: string): Promise<PageBoot> => {
+        const html = await (await fetch(url)).text();
+        expect(html.match(/<\/script>/g)?.length).toBe(2);
+        const match = new RegExp(
+            `<script type="application/json" id="${BOOT_ELEMENT}">(.*?)</script>`,
+        ).exec(html);
+        return JSON.parse(match![1]!) as PageBoot;
+    };
+    const store = async (
+        on: MarginServer,
+        docId: string,
+        body: unknown,
+        headers: Record<string, string> = {
+            authorization: `Bearer ${on.token}`,
+            origin: on.origin,
+        },
+    ) =>
+        await fetch(`${on.origin}${routes.stored(docId)}`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+        });
+
+    beforeAll(async () => {
+        storeRoot = mkdtempSync(join(tmpdir(), "margin-stored-"));
+        mkdirSync(join(storeRoot, "state"));
+        for (const name of ["a.md", "b.md"]) {
+            writeFileSync(join(storeRoot, name), "# Doc\n");
+        }
+        storing = await start();
+    });
+
+    afterAll(async () => {
+        await storing.stop();
+        rmSync(storeRoot, { recursive: true, force: true });
+    });
+
+    test("the page comes with the device's settings and its own doc's keys, no other doc's", async () => {
+        const a = await storing.register(join(storeRoot, "a.md"));
+        const b = await storing.register(join(storeRoot, "b.md"));
+        expect((await bootOf(a.url)).stored).toEqual({});
+        const set = { [DEVICE_KEYS.view]: '{"density":"lg"}', "margin:reply:c1": DRAFT };
+        const response = await store(storing, a.docId, { set });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ ok: true });
+        expect((await bootOf(a.url)).stored).toEqual(set);
+        expect((await bootOf(b.url)).stored).toEqual({ [DEVICE_KEYS.view]: '{"density":"lg"}' });
+        await store(storing, a.docId, { delete: ["margin:reply:c1"] });
+        expect((await bootOf(a.url)).stored).toEqual({ [DEVICE_KEYS.view]: '{"density":"lg"}' });
+    });
+
+    test("a request without the token gets no page and none of the stored text", async () => {
+        const { docId, url } = await storing.register(join(storeRoot, "a.md"));
+        await store(storing, docId, { set: { "margin:reply:c2": DRAFT } });
+        const bare = new URL(url);
+        for (const search of ["", "?t=wrong"]) {
+            const response = await fetch(`${bare.origin}${bare.pathname}${search}`, {
+                redirect: "manual",
+            });
+            expect(response.status).toBe(403);
+            const body = await response.text();
+            expect(body).not.toContain("unsent reply");
+            expect(body).not.toContain(BOOT_ELEMENT);
+        }
+        expect((await bootOf(url)).stored?.["margin:reply:c2"]).toBe(DRAFT);
+    });
+
+    test("a write needs the token and this origin, and a well-formed change", async () => {
+        const { docId, url } = await storing.register(join(storeRoot, "b.md"));
+        const set = { "margin:reply:c9": "refused" };
+        expect((await store(storing, docId, { set }, { origin: storing.origin })).status).toBe(403);
+        expect(
+            (await store(storing, docId, { set }, { authorization: `Bearer ${storing.token}` }))
+                .status,
+        ).toBe(403);
+        expect(
+            (
+                await store(
+                    storing,
+                    docId,
+                    { set },
+                    { authorization: `Bearer ${storing.token}`, origin: "http://evil.test" },
+                )
+            ).status,
+        ).toBe(403);
+        for (const body of [{ set: { other: "x" } }, { set: { "margin:x": 1 } }, { delete: "x" }]) {
+            expect((await store(storing, docId, body)).status).toBe(400);
+        }
+        expect((await store(storing, "ffffffffffff", { set })).status).toBe(404);
+        expect((await bootOf(url)).stored?.["margin:reply:c9"]).toBeUndefined();
+    });
+
+    test("the values outlive the daemon: a new one on a new port serves them", async () => {
+        const first = await start();
+        const opened = await first.register(join(storeRoot, "a.md"));
+        await store(first, opened.docId, {
+            set: { [DEVICE_KEYS.theme]: "dark", "margin:reply:c5": "still here" },
+        });
+        await first.stop();
+        const second = await start();
+        try {
+            expect(second.origin).not.toBe(first.origin);
+            const { stored } = await bootOf((await second.register(join(storeRoot, "a.md"))).url);
+            expect(stored?.[DEVICE_KEYS.theme]).toBe("dark");
+            expect(stored?.["margin:reply:c5"]).toBe("still here");
+        } finally {
+            await second.stop();
+        }
+    });
+
+    test("a daemon with nowhere to keep them sends none and refuses the write", async () => {
+        const { docId, url } = await server.register(docPath("edge-bom.md"));
+        const boot = await bootOf(url);
+        expect("stored" in boot).toBe(false);
+        expect((await store(server, docId, { set: { "margin:x": "v" } })).status).toBe(404);
     });
 });
 

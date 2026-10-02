@@ -8,6 +8,7 @@ import type {
     ThreadId,
     ThreadState,
 } from "../../core/model.ts";
+import { DOC_META } from "../../server/protocol.ts";
 import { recall, remember } from "../storage.ts";
 import { relativeTime } from "../time.ts";
 import type { ApplyControls } from "../use-apply.ts";
@@ -280,8 +281,13 @@ interface CardActionsProps {
     pending: boolean;
 }
 
+/**
+ * By doc id, not the page path: the path changes form when two open docs share a short id. The
+ * id also keeps two docs apart where browser storage, one per origin, is the store.
+ */
 function replyKey(id: ThreadId): string {
-    return `margin:reply:${window.location.pathname}:${id}`;
+    const doc = document.querySelector<HTMLMetaElement>(`meta[name="${DOC_META}"]`)?.content;
+    return `margin:reply:${doc ?? ""}:${id}`;
 }
 
 /** Unsent reply text outlives the card collapsing (the thread losing focus) and a reload. */

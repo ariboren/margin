@@ -1,4 +1,5 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
+import { DEVICE_KEYS } from "../server/protocol.ts";
 import { recall, remember } from "./storage.ts";
 
 export type Scale = "sm" | "md" | "lg";
@@ -9,7 +10,7 @@ export type EditOn = "click" | "dblclick";
 export interface ViewPrefs {
     /** Text size of the reading column. */
     density: Scale;
-    /** Space around the reading column; large is the classic layout, small fills the window. */
+    /** Space around the reading column; small fills the window. */
     margins: Scale;
     editOn: EditOn;
     showMargin: boolean;
@@ -17,14 +18,14 @@ export interface ViewPrefs {
     showResolved: boolean;
 }
 
-const storageKey = "margin:view";
+const storageKey = DEVICE_KEYS.view;
 export const defaultPrefs: ViewPrefs = {
     density: "md",
-    margins: "lg",
+    margins: "md",
     editOn: "dblclick",
     showMargin: true,
     showOutline: true,
-    showResolved: false,
+    showResolved: true,
 };
 
 function scale(value: unknown, fallback: Scale): Scale {
@@ -71,9 +72,13 @@ export function applyViewPrefs(prefs: ViewPrefs): void {
 
 export function useViewPrefs(): [ViewPrefs, (change: Partial<ViewPrefs>) => void] {
     const [prefs, setPrefs] = useState(loadPrefs);
+    const loaded = useRef(prefs);
     useEffect(() => {
         applyViewPrefs(prefs);
-        remember(storageKey, JSON.stringify(prefs));
+        // Only a change is stored: defaults written on load would outlive a change of defaults.
+        if (prefs !== loaded.current) {
+            remember(storageKey, JSON.stringify(prefs));
+        }
     }, [prefs]);
     return [prefs, (change) => setPrefs((current) => ({ ...current, ...change }))];
 }

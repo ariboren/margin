@@ -16,8 +16,11 @@ import {
 import { isFile, repoRelativePath, resolveLinkedFile } from "./doc-location.ts";
 import { openFile, openableLink, revealFile, type FileOpener } from "./open-file.ts";
 import { openTab, type Env, type Opener } from "./open-tab.ts";
+import { pageStore, parseChange } from "./page-store.ts";
 import {
+    deviceDir,
     ensureStateDir,
+    pageStorePath,
     removeDaemonInfo,
     stateDir,
     statePaths,
@@ -103,6 +106,8 @@ export interface ServerOptions {
     watch?: { pollMs?: number };
     /** Where each doc's last seen hash is kept between runs; unset keeps nothing. */
     stateDir?: string;
+    /** The file holding what pages store on the device; unset, pages keep to browser storage. */
+    storePath?: string;
     /** Handed to the openers (they pick Orca from any `ORCA_*` name). Defaults to process.env. */
     env?: Env;
     /** Opens an http(s) link for `open-url`; defaults to `openTab`. */
@@ -162,6 +167,9 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
     const boot = randomUUID();
     let builds = 0;
     const devStamp = options.dev ? () => `${boot}.${builds}` : undefined;
+    const stored = options.storePath
+        ? pageStore(options.storePath, { onCorrupt: logError })
+        : undefined;
 
     const clients = () => [...docs.values()].reduce((sum, doc) => sum + doc.session.clients, 0);
 
@@ -369,7 +377,9 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
                     headers: { ...SECURITY_HEADERS, location: `${pagePath(docId)}${url.search}` },
                 });
             }
-            return shell(doc, token);
+            // Past the token check above, like every route but the client bundle: the stored
+            // values include unsent drafts.
+            return shell(doc, token, stored?.read(docId));
         }
 
         const api = /^\/api\/docs\/([0-9a-f]{12})\/([a-z-]+)$/.exec(pathname);
@@ -435,6 +445,14 @@ export async function startServer(options: ServerOptions = {}): Promise<MarginSe
                 opened: await (body.reveal === true ? revealPath : openPath)(path, env),
             };
             return json(opened);
+        }
+        if (action === "stored" && request.method === "POST") {
+            const change = parseChange(await readJson(request));
+            if (!change || !stored) {
+                return error(change ? 404 : 400, change ? "not-found" : "bad-request");
+            }
+            stored.apply(doc.session.docId, change);
+            return json({ ok: true });
         }
         if (action === "open-url" && request.method === "POST") {
             const body = await readJson(request);
@@ -757,13 +775,14 @@ function events(
     });
 }
 
-function shell(doc: Registered, token: string): Response {
+function shell(doc: Registered, token: string, stored?: Record<string, string>): Response {
     const { session } = doc;
     const title = escapeHtml(`${basename(session.path)} · margin`);
     const boot: PageBoot = {
         docId: session.docId,
         path: session.path,
         relativePath: doc.relativePath,
+        ...(stored ? { stored } : {}),
     };
     const html = `<!doctype html>
 <html lang="en">
@@ -869,6 +888,16 @@ function logError(caught: unknown): void {
     console.error(`[margin ${new Date().toISOString()}] ${message}`);
 }
 
+/** Undefined when the directory cannot be had: pages then keep to browser storage. */
+function devicePath(): string | undefined {
+    try {
+        return pageStorePath(ensureStateDir(deviceDir()));
+    } catch (caught) {
+        logError(caught);
+        return undefined;
+    }
+}
+
 /** The detached daemon: serve, publish `daemon.json`, exit on stop, signal or idle. */
 async function runDaemon(): Promise<void> {
     const paths = statePaths(ensureStateDir(stateDir()));
@@ -888,6 +917,7 @@ async function runDaemon(): Promise<void> {
     };
     server = await startServer({
         stateDir: paths.dir,
+        storePath: devicePath(),
         onStop: () => void shutdown(),
         // Under `bun run dev` the supervisor owns the lifetime, and a pinned port and token let
         // open tabs reconnect across restarts.

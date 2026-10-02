@@ -1,21 +1,19 @@
-import { useCallback, useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { DEVICE_KEYS } from "../server/protocol.ts";
+import { recall, remember } from "./storage.ts";
 import { useMedia } from "./use-media.ts";
 
 export type ThemeChoice = "system" | "light" | "dark";
 
-const storageKey = "margin:theme";
+const storageKey = DEVICE_KEYS.theme;
 
 export function readChoice(): ThemeChoice {
     const preset = document.documentElement.dataset.theme;
     if (preset === "light" || preset === "dark") {
         return preset;
     }
-    try {
-        const stored = localStorage.getItem(storageKey);
-        return stored === "light" || stored === "dark" ? stored : "system";
-    } catch {
-        return "system";
-    }
+    const stored = recall(storageKey);
+    return stored === "light" || stored === "dark" ? stored : "system";
 }
 
 /** Sets the theme attribute the stylesheet reads; main.tsx applies the stored choice before the first paint. */
@@ -30,14 +28,14 @@ export function applyTheme(choice: ThemeChoice): void {
 
 export function useTheme(): { dark: boolean; toggle: () => void } {
     const [choice, setChoice] = useState<ThemeChoice>(readChoice);
+    const loaded = useRef(choice);
     const systemDark = useMedia("(prefers-color-scheme: dark)");
 
     useEffect(() => {
         applyTheme(choice);
-        try {
-            localStorage.setItem(storageKey, choice);
-        } catch {
-            // Storage can be blocked (private windows, file:// in some browsers); the choice still applies.
+        // Only a change is stored: the mockup's preset theme is not the viewer's choice.
+        if (choice !== loaded.current) {
+            remember(storageKey, choice);
         }
     }, [choice]);
 
