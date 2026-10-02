@@ -15,6 +15,15 @@ export function oneLine(text: string): string {
     return text.replace(/\r?\n/g, "\\n");
 }
 
+/**
+ * A path as one shell word: as it is when plain, else single-quoted, so a doc named in a watch
+ * line pastes into `margin pending`.
+ */
+export function shellWord(path: string): string {
+    if (/^[\w@%+=:,./-]+$/.test(path)) return path;
+    return `'${path.replaceAll("'", "'\\''")}'`;
+}
+
 export type CompactLine = Extract<WatchLine, { form: "compact" }>;
 
 /**

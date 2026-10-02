@@ -200,17 +200,37 @@ describe("presence", () => {
             writeFileSync(path, "# Doc\n");
             return path;
         });
-        const releases = docs.map((path) => holdPresence(path, FOREMAN));
+        const holds = docs.map((path) => holdPresence(path, FOREMAN));
         expect(count()).toEqual(before.map((listeners) => listeners + 1));
         expect(docs.map((path) => connectedAgents(path))).toEqual(docs.map(() => [FOREMAN]));
-        releases[0]!();
-        releases[0]!();
+        holds[0]!.release();
+        holds[0]!.release();
         expect(connectedAgents(docs[0]!)).toEqual([]);
         expect(connectedAgents(docs[1]!)).toEqual([FOREMAN]);
         expect(count()).toEqual(before.map((listeners) => listeners + 1));
-        for (const release of releases) release();
+        for (const hold of holds) hold.release();
         expect(count()).toEqual(before);
         expect(docs.flatMap((path) => connectedAgents(path))).toEqual([]);
+    });
+
+    test("renew writes the entry again once a deleted .margin/ is back, and never brings it back itself", () => {
+        const hold = holdPresence(doc, FOREMAN);
+        try {
+            rmSync(join(dir, ".margin"), { recursive: true, force: true });
+            hold.renew();
+            expect(existsSync(join(dir, ".margin"))).toBe(false);
+            mkdirSync(join(dir, ".margin"));
+            hold.renew();
+            expect(connectedAgents(doc)).toEqual([FOREMAN]);
+            const [name] = entriesOf(process.pid);
+            hold.renew();
+            expect(entriesOf(process.pid)).toEqual([name!]);
+        } finally {
+            hold.release();
+        }
+        expect(entries()).toEqual([]);
+        hold.renew();
+        expect(entries()).toEqual([]);
     });
 
     test("a dead pid's entry reads false and is pruned", async () => {

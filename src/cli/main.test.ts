@@ -7,14 +7,16 @@ import { readLog } from "../core/log.ts";
 import { createThread } from "../core/threads.ts";
 import { connectedAgents } from "../server/presence.ts";
 import {
+    NO_DOCS,
     agentHelp,
     lineAsker,
+    onlyDoc,
     run,
     stripFinalNewline,
     type Io,
     type ServerCommands,
 } from "./main.ts";
-import { recordDoc } from "./registry.ts";
+import { recordDoc, sessionDocs } from "./registry.ts";
 import { DOC, sandbox, type Sandbox } from "./testing.ts";
 
 const MAIN = join(import.meta.dir, "main.ts");
@@ -213,13 +215,70 @@ describe("every contract command against a temp dir with no daemon", () => {
             const other = second();
             await box.cli(["pending", "doc.md"]);
             await box.comment("cold path", "A");
-            expect((await box.cli(["watch", "--once"])).stdout).toBe('new c1 "Findings"\n');
+            expect((await box.cli(["watch", "--once"])).stdout).toBe(
+                `${onlyDoc("doc.md")}new c1 "Findings"\n`,
+            );
+            expect(onlyDoc("doc.md")).toStartWith("only doc.md; set MARGIN_SESSION=");
             await box.cli(["pending", "b/doc.md"]);
             await commentOn(other, "B");
             expect(await box.cli(["watch", "--once"])).toEqual({
                 code: 1,
                 stdout: "err not-unique; pass the doc: b/doc.md doc.md\n",
             });
+        });
+
+        test("a watch that names its doc, by path or MARGIN_DOC, prints no notice", async () => {
+            await box.comment("cold path", "A");
+            expect((await box.cli(["watch", "doc.md", "--once"])).stdout).toBe(
+                'new c1 "Findings"\n',
+            );
+            await box.comment("Retry queue", "B");
+            box.env.MARGIN_DOC = box.doc;
+            expect((await box.cli(["watch", "--once"])).stdout).toBe('new c2 "Findings"\n');
+        });
+
+        test("a session with nothing listed starts from the recent doc under cwd and lists it", async () => {
+            await box.cli(["pending", "doc.md"]);
+            await box.comment("cold path", "A");
+            box.env.MARGIN_SESSION = "fresh";
+            expect(sessionDocs(box.env)).toBeUndefined();
+            expect((await box.cli(["watch", "--once"])).stdout).toBe('new c1 "Findings"\n');
+            expect(sessionDocs(box.env)).toEqual([realpathSync(box.doc)]);
+        });
+
+        test("a session with nothing listed and no doc to find says so, then waits for one", async () => {
+            box.env.MARGIN_SESSION = "fresh";
+            const stop = new AbortController();
+            let stdout = "";
+            const running = run(["watch"], {
+                cwd: box.dir,
+                env: box.env,
+                isTTY: false,
+                write: (text) => {
+                    stdout += text;
+                },
+                stdin: async () => "",
+                signal: stop.signal,
+            });
+            const deadline = Date.now() + 5_000;
+            while (stdout === "" && Date.now() < deadline) await Bun.sleep(10);
+            expect(stdout).toBe(NO_DOCS);
+            await box.comment("cold path", "A");
+            await recordDoc(box.doc, box.env);
+            while (stdout === NO_DOCS && Date.now() < deadline) await Bun.sleep(10);
+            stop.abort();
+            expect(await running).toBe(0);
+            expect(stdout).toBe(`${NO_DOCS}new c1 "Findings"\n`);
+        });
+
+        test("a doc whose path needs quoting is named as one shell word", async () => {
+            const spaced = join(box.dir, "my plan.md");
+            copyFileSync(box.doc, spaced);
+            box.env.MARGIN_SESSION = "one";
+            await box.cli(["pending", "doc.md"]);
+            await box.cli(["pending", "my plan.md"]);
+            await commentOn(spaced, "B");
+            expect((await box.cli(["watch", "--once"])).stdout).toBe("'my plan.md': new c1\n");
         });
 
         test("a dozen docs: connected on each, no listener warning, all released on SIGTERM", async () => {

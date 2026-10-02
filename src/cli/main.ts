@@ -11,10 +11,10 @@ import type { Ack, ThreadId } from "../core/model.ts";
 import type { Env } from "../server/open-tab.ts";
 import { reply, resolveThread, show, suggest } from "./commands.ts";
 import { cwdRoot, docName, isThreadId, resolveDoc, type DocTarget } from "./doc.ts";
-import { formatAck, formatShow } from "./format.ts";
+import { formatAck, formatShow, shellWord } from "./format.ts";
 import { resolveAgent, sessionKey } from "./identity.ts";
 import { pending, pendingWait } from "./pending.ts";
-import { recordDoc, sessionDocs } from "./registry.ts";
+import { recordDoc, sessionDocs, touchSession } from "./registry.ts";
 import { setup } from "./setup.ts";
 import { isFile } from "../server/doc-location.ts";
 import { watch, watchSession } from "./watch.ts";
@@ -93,12 +93,10 @@ function waitOptions(io: Io) {
     };
 }
 
-/**
- * `margin watch` with no doc named, by argument or `MARGIN_DOC`, follows every doc the agent
- * session has opened. Without a session it is the one recent doc under cwd, as before.
- */
-function followsSession(args: string[], env: Env): boolean {
-    return args[0] === undefined && !env.MARGIN_DOC && sessionKey(env) !== undefined;
+export const NO_DOCS = "no docs open in this session yet; waiting\n";
+
+export function onlyDoc(doc: string): string {
+    return `only ${doc}; set MARGIN_SESSION=<name> on every margin command to watch all docs, or watch each doc\n`;
 }
 
 export async function run(argv: string[], io: Io, server?: ServerCommands): Promise<number> {
@@ -129,20 +127,33 @@ export async function run(argv: string[], io: Io, server?: ServerCommands): Prom
                 return await setup(io, { user: values.user, force: values.force });
             case "watch":
             case "pending": {
-                if (command === "watch" && followsSession(rest, io.env)) {
-                    const root = cwdRoot(io.cwd);
-                    await watchSession(() => sessionDocs(io.env).filter(isFile), write, {
+                const unnamed = command === "watch" && rest[0] === undefined && !io.env.MARGIN_DOC;
+                const root = cwdRoot(io.cwd);
+                const label = (doc: string) => shellWord(docName(doc, root));
+                const target = await resolveDoc({ explicit: rest[0], cwd: io.cwd, env: io.env });
+                if (unnamed && sessionKey(io.env) !== undefined) {
+                    const listed = () => sessionDocs(io.env)?.filter(isFile);
+                    // A session with nothing listed (the user opened the doc, or an older margin
+                    // did) starts from the doc a watch with no path used to find.
+                    if (!listed()?.length) {
+                        if (target.ok) await recordDoc(target.path, io.env);
+                        else io.write(NO_DOCS);
+                    }
+                    await watchSession(listed, write, {
                         ...waitOptions(io),
                         once: values.once,
                         agent: resolveAgent({ as: values.as, env: io.env }),
-                        name: (doc) => docName(doc, root),
+                        name: label,
+                        refresh: () => touchSession(io.env),
                     });
                     return 0;
                 }
-                const target = await resolveDoc({ explicit: rest[0], cwd: io.cwd, env: io.env });
                 if (!target.ok) return docFailure(io, target);
                 await recordDoc(target.path, io.env);
                 const agent = resolveAgent({ as: values.as, env: io.env });
+                // With no session id there is no telling which docs are this agent's, so the
+                // watch covers one, and says so: a second doc's threads would never arrive.
+                if (unnamed) io.write(onlyDoc(label(target.path)));
                 if (command === "watch") {
                     await watch(target.path, write, {
                         ...waitOptions(io),

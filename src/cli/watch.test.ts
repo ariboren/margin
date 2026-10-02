@@ -2,13 +2,22 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { createAnchor } from "../core/anchor.ts";
+import { withLock } from "../core/lock.ts";
 import { readLog, sidecar } from "../core/log.ts";
 import type { AgentIdentity, Event, EventInput } from "../core/model.ts";
 import { createThread, foldLog } from "../core/threads.ts";
 import { isFile } from "../server/doc-location.ts";
 import { connectedAgents } from "../server/presence.ts";
 import { DOC, sandbox, type Sandbox } from "./testing.ts";
-import { DEBOUNCE_MS, docWake, emitWatch, wakeReason, watch, watchSession } from "./watch.ts";
+import {
+    DEBOUNCE_MS,
+    LIST_LOST,
+    docWake,
+    emitWatch,
+    wakeReason,
+    watch,
+    watchSession,
+} from "./watch.ts";
 
 let box: Sandbox;
 
@@ -453,7 +462,7 @@ describe("re-arming", () => {
 
 describe("one watch over a session's docs", () => {
     const FOREMAN: AgentIdentity = { name: "foreman", client: "claude-code" };
-    let docs: string[];
+    let docs: string[] | undefined;
     let stop: AbortController;
 
     beforeEach(() => {
@@ -479,8 +488,11 @@ describe("one watch over a session's docs", () => {
         ]);
     }
 
-    function start(out: ReturnType<typeof collect>, options: { debounceMs?: number } = {}) {
-        return watchSession(() => docs.filter(isFile), out.write, {
+    function start(
+        out: ReturnType<typeof collect>,
+        options: { debounceMs?: number; refresh?: () => void; refreshMs?: number } = {},
+    ) {
+        return watchSession(() => docs?.filter(isFile), out.write, {
             debounceMs: 0,
             ...options,
             signal: stop.signal,
@@ -582,12 +594,82 @@ describe("one watch over a session's docs", () => {
         await box.comment("Retry queue", "Into a new log");
         await commentOn(other, "cold path", "Elsewhere");
         await until(() => out.lines.length === 3, "both docs' lines");
+        await until(() => connectedAgents(box.doc).length === 1, "presence in the new sidecar");
+        expect(connectedAgents(box.doc)).toEqual([FOREMAN]);
         stop.abort();
         await running;
         expect(out.lines.slice(1).sort()).toEqual([
             'doc.md: new c1 "Findings"\n',
             'other.md: new c1 "Findings"\n',
         ]);
+        expect(connectedAgents(box.doc)).toEqual([]);
+    });
+
+    test("a lock held on one doc does not hold up another doc's batch", async () => {
+        const other = another("other.md");
+        docs = [box.doc, other];
+        const out = collect();
+        const running = start(out, { debounceMs: 300 });
+        await Bun.sleep(200);
+        await box.comment("cold path", "Behind the lock");
+        let unlock = () => {};
+        const locked = withLock(
+            sidecar(box.doc).lock,
+            () => new Promise<void>((resolve) => (unlock = resolve)),
+        );
+        await commentOn(other, "cold path", "Free");
+        const started = Date.now();
+        await until(() => out.lines.length === 1, "the unlocked doc's line");
+        expect(Date.now() - started).toBeLessThan(2_000);
+        expect(out.lines).toEqual(['other.md: new c1 "Findings"\n']);
+        await Bun.sleep(500);
+        expect(out.lines).toHaveLength(1);
+        unlock();
+        await locked;
+        await until(() => out.lines.length === 2, "the locked doc's line");
+        stop.abort();
+        await running;
+        expect(out.lines[1]).toBe('doc.md: new c1 "Findings"\n');
+    });
+
+    test("a list removed under the watch is said once; the docs it had stay watched", async () => {
+        const other = another("other.md");
+        docs = [box.doc, other];
+        const out = collect();
+        const running = start(out);
+        await until(() => connectedAgents(other).length === 1, "both docs followed");
+        docs = undefined;
+        await until(() => out.lines.length === 1, "the notice");
+        await Bun.sleep(400);
+        expect(out.lines).toEqual([LIST_LOST]);
+        await commentOn(other, "cold path", "Still watched");
+        await until(() => out.lines.length === 2, "the line");
+        expect(out.lines[1]).toBe('other.md: new c1 "Findings"\n');
+        docs = [box.doc];
+        await until(() => connectedAgents(other).length === 0, "the new list to apply");
+        stop.abort();
+        await running;
+        expect(out.lines).toHaveLength(2);
+    });
+
+    test("a session with no list yet waits without a word", async () => {
+        docs = undefined;
+        const out = collect();
+        const running = start(out);
+        await Bun.sleep(400);
+        stop.abort();
+        await running;
+        expect(out.lines).toEqual([]);
+    });
+
+    test("marks its list as in use when it starts and at each interval after", async () => {
+        let refreshes = 0;
+        const running = start(collect(), { refresh: () => refreshes++, refreshMs: 300 });
+        await Bun.sleep(100);
+        expect(refreshes).toBe(1);
+        await until(() => refreshes >= 3, "two more refreshes");
+        stop.abort();
+        await running;
     });
 
     test("--once ends the watch at the first printed batch, whichever doc it is", async () => {

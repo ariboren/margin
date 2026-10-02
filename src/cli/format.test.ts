@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { byteLength } from "../core/diff.ts";
 import type { Ack, AckError, PendingReview } from "../core/model.ts";
 import { applyEdit } from "../core/apply.ts";
-import { formatAck, formatPending, formatWatch } from "./format.ts";
+import { formatAck, formatPending, formatWatch, shellWord } from "./format.ts";
 import { sandbox } from "./testing.ts";
 
 const ACK_CEILING = 24;
@@ -162,4 +162,12 @@ describe("a multi-line setext heading", () => {
             box.cleanup();
         }
     });
+});
+
+test("a doc label is one shell word: plain paths as they are, the rest single-quoted", () => {
+    expect(shellWord("notes/plan-v2_final.md")).toBe("notes/plan-v2_final.md");
+    expect(shellWord("/abs/path/a.md")).toBe("/abs/path/a.md");
+    expect(shellWord("my plan.md")).toBe("'my plan.md'");
+    expect(shellWord("a$b.md")).toBe("'a$b.md'");
+    expect(shellWord("it's (1).md")).toBe("'it'\\''s (1).md'");
 });

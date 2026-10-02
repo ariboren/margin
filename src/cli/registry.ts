@@ -3,12 +3,14 @@
 // Beside it, the same list per agent session, which is what `margin watch` with no path follows.
 import { createHash } from "node:crypto";
 import {
+    existsSync,
     mkdirSync,
     readFileSync,
     readdirSync,
     renameSync,
     rmSync,
     statSync,
+    utimesSync,
     writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -61,10 +63,29 @@ function sessionPaths(env: Env, key: string): { dir: string; file: string; lock:
     return { dir, file: join(dir, `${name}.json`), lock: join(dir, "lock") };
 }
 
-/** The docs this agent session has opened, newest first; none without a session. */
-export function sessionDocs(env: Env): string[] {
+/**
+ * The docs this agent session has opened, newest first. Undefined without a session, and when
+ * the session has no list: nothing recorded yet, or the list was removed.
+ */
+export function sessionDocs(env: Env): string[] | undefined {
     const key = sessionKey(env);
-    return key === undefined ? [] : readList(sessionPaths(env, key).file);
+    if (key === undefined) return undefined;
+    const { file } = sessionPaths(env, key);
+    return existsSync(file) ? readList(file) : undefined;
+}
+
+/**
+ * Marks the session's list as in use now. A watch that runs for weeks records nothing, and
+ * without this another session's prune would take its list from under it.
+ */
+export function touchSession(env: Env, now = Date.now()): void {
+    const key = sessionKey(env);
+    if (key === undefined) return;
+    try {
+        utimesSync(sessionPaths(env, key).file, now / 1000, now / 1000);
+    } catch {
+        // No list yet.
+    }
 }
 
 function pruneSessions(dir: string, keep: string, now: number): void {

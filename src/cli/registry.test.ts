@@ -16,6 +16,7 @@ import {
     recentDocs,
     recordDoc,
     sessionDocs,
+    touchSession,
 } from "./registry.ts";
 
 let dir: string;
@@ -84,7 +85,7 @@ describe("session docs", () => {
 
     test("without a session nothing is listed and nothing is written", async () => {
         await recordDoc(doc("a.md"), env);
-        expect(sessionDocs(env)).toEqual([]);
+        expect(sessionDocs(env)).toBeUndefined();
         expect(existsSync(join(env.MARGIN_STATE_DIR!, "sessions"))).toBe(false);
     });
 
@@ -100,7 +101,7 @@ describe("session docs", () => {
     test("keeps at most the newest RECENT_DOCS_MAX docs", async () => {
         const session = { ...env, MARGIN_SESSION: "one" };
         for (let i = 0; i <= RECENT_DOCS_MAX; i++) await recordDoc(doc(`${i}.md`), session);
-        const list = sessionDocs(session);
+        const list = sessionDocs(session)!;
         expect(list).toHaveLength(RECENT_DOCS_MAX);
         expect(list[0]).toBe(join(dir, `${RECENT_DOCS_MAX}.md`));
     });
@@ -113,8 +114,25 @@ describe("session docs", () => {
         await recordDoc(a, live, Date.now() + SESSION_MAX_AGE_MS - 60_000);
         expect(sessionDocs(old)).toEqual([a]);
         await recordDoc(a, live, Date.now() + SESSION_MAX_AGE_MS + 60_000);
-        expect(sessionDocs(old)).toEqual([]);
+        expect(sessionDocs(old)).toBeUndefined();
         expect(sessionDocs(live)).toEqual([a]);
         expect(sessionFiles()).toHaveLength(1);
+    });
+
+    test("a session marked as in use is not dropped, however long ago it last recorded", async () => {
+        const watching = { ...env, MARGIN_SESSION: "watching" };
+        const other = { ...env, MARGIN_SESSION: "other" };
+        const a = doc("a.md");
+        await recordDoc(a, watching);
+        const later = Date.now() + SESSION_MAX_AGE_MS + 60_000;
+        touchSession(watching, later - 1_000);
+        await recordDoc(a, other, later);
+        expect(sessionDocs(watching)).toEqual([a]);
+    });
+
+    test("marking a session with no list, or no session, does nothing", () => {
+        touchSession({ ...env, MARGIN_SESSION: "none" });
+        touchSession(env);
+        expect(existsSync(join(env.MARGIN_STATE_DIR!, "sessions"))).toBe(false);
     });
 });

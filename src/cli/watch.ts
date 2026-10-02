@@ -12,9 +12,9 @@ import {
     type ThreadId,
     type WakeReason,
 } from "../core/model.ts";
-import { LockTimeoutError } from "../core/lock.ts";
+import { LockTimeoutError, type LockOptions } from "../core/lock.ts";
 import { readLog, sidecar, transact } from "../core/log.ts";
-import { holdPresence, withPresence } from "../server/presence.ts";
+import { holdPresence, withPresence, type PresenceHold } from "../server/presence.ts";
 import {
     applyEvent,
     emptyState,
@@ -171,26 +171,31 @@ export async function emitWatch(
     docPath: string,
     write: (text: string) => void,
     agent?: AgentIdentity,
+    lock?: LockOptions,
 ): Promise<boolean> {
-    return await transact(docPath, (txn) => {
-        const view = viewOf(docPath, txn.events);
-        const cursor = view.state.cursors.watch;
-        if (!hasWakeAfter(txn.events, view.state, cursor)) return false;
-        const line = watchLine(view, txn.events, cursor);
-        txn.append([
-            {
-                type: "cursor",
-                by: "agent",
-                ...signed(agent),
-                stream: "watch",
-                upTo: view.state.version,
-                ids: line?.groups.flatMap((group) => group.ids) ?? [],
-            },
-        ]);
-        if (!line) return false;
-        write(`${formatWatch(line)}\n`);
-        return true;
-    });
+    return await transact(
+        docPath,
+        (txn) => {
+            const view = viewOf(docPath, txn.events);
+            const cursor = view.state.cursors.watch;
+            if (!hasWakeAfter(txn.events, view.state, cursor)) return false;
+            const line = watchLine(view, txn.events, cursor);
+            txn.append([
+                {
+                    type: "cursor",
+                    by: "agent",
+                    ...signed(agent),
+                    stream: "watch",
+                    upTo: view.state.version,
+                    ids: line?.groups.flatMap((group) => group.ids) ?? [],
+                },
+            ]);
+            if (!line) return false;
+            write(`${formatWatch(line)}\n`);
+            return true;
+        },
+        lock,
+    );
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -262,6 +267,11 @@ export class WakeTail {
         return POLL_MS;
     }
 
+    /** Makes the batch `poll` just announced due again: it could not be emitted this time. */
+    retry(): void {
+        this.first = this.last = -Infinity;
+    }
+
     /** Forgets what was read, so the next poll reads the log whole and a backlog is due at once. */
     reset(): void {
         this.offset = 0;
@@ -330,16 +340,29 @@ export async function watch(
     });
 }
 
+/** Printed once when a session's doc list is removed under a running watch. */
+export const LIST_LOST =
+    "session doc list lost; run margin pending <doc> on each doc to keep it watched\n";
+
+/** How often a session watch marks its list as in use, and looks after its presence entries. */
+const REFRESH_MS = 60 * 60 * 1000;
+const RENEW_MS = 1_000;
+/** A doc whose lock is held is tried again this soon; the other docs are not kept waiting. */
+const LOCK_RETRY_MS = 25;
+
 export interface SessionWatchOptions extends WaitOptions {
     once?: boolean;
     agent?: AgentIdentity;
     /** How a line names its doc, in a form the agent can pass back to `margin pending`. */
     name?: (docPath: string) => string;
+    /** Called at the start and every `refreshMs` after: keeps the session's list from expiring. */
+    refresh?: () => void;
+    refreshMs?: number;
 }
 
 interface Followed {
     tail: WakeTail;
-    release: () => void;
+    presence: PresenceHold;
 }
 
 /**
@@ -348,29 +371,40 @@ interface Followed {
  * entry, as if it had a watch of its own. A line leads with its doc while more than one is
  * followed. Runs until aborted, or after the first printed batch with `once`; with no docs it
  * waits for one.
+ *
+ * `docs` answers undefined when the session has no list. If that happens to a list the watch has
+ * seen, it says so once and keeps the docs it has: going quiet would look like nothing to answer.
  */
 export async function watchSession(
-    docs: () => string[],
+    docs: () => string[] | undefined,
     write: (text: string) => void,
     options: SessionWatchOptions = {},
 ): Promise<void> {
     const { signal, agent } = options;
     const name = options.name ?? ((docPath: string) => docPath);
+    const refreshMs = options.refreshMs ?? REFRESH_MS;
     const followed = new Map<string, Followed>();
+    let listed = false;
+    let refreshed = -Infinity;
+    let renewed = Date.now();
     try {
         while (!signal?.aborted) {
-            const current = new Set(docs());
-            for (const [doc, entry] of followed) {
-                if (current.has(doc)) continue;
-                entry.release();
-                followed.delete(doc);
+            const now = Date.now();
+            if (now - refreshed >= refreshMs) {
+                options.refresh?.();
+                refreshed = now;
             }
-            for (const doc of current) {
-                if (followed.has(doc)) continue;
-                followed.set(doc, {
-                    tail: new WakeTail(doc, "watch", options),
-                    release: holdPresence(doc, agent ?? UNKNOWN_AGENT),
-                });
+            const current = docs();
+            if (current === undefined) {
+                if (listed) write(LIST_LOST);
+                listed = false;
+            } else {
+                listed = true;
+                follow(followed, current, options);
+            }
+            if (now - renewed >= RENEW_MS) {
+                for (const { presence } of followed.values()) presence.renew();
+                renewed = now;
             }
             let wait = POLL_MS;
             for (const [doc, { tail }] of followed) {
@@ -382,8 +416,14 @@ export async function watchSession(
                     }
                     const lead = followed.size > 1 ? `${name(doc)}: ` : "";
                     const print = (text: string) => write(lead + text);
-                    if ((await emitRetrying(doc, print, signal, agent)) && options.once) return;
+                    if ((await emitWatch(doc, print, agent, { timeoutMs: 0 })) && options.once)
+                        return;
                 } catch (error) {
+                    if (error instanceof LockTimeoutError) {
+                        tail.retry();
+                        wait = Math.min(wait, LOCK_RETRY_MS);
+                        continue;
+                    }
                     if (typeof (error as NodeJS.ErrnoException).code !== "string") throw error;
                     // The doc or its sidecar went away mid-read. The other docs carry on, and
                     // this one is read afresh on the next pass: its cursor is in its log.
@@ -393,6 +433,26 @@ export async function watchSession(
             await sleep(wait, signal);
         }
     } finally {
-        for (const entry of followed.values()) entry.release();
+        for (const { presence } of followed.values()) presence.release();
+    }
+}
+
+function follow(
+    followed: Map<string, Followed>,
+    docs: readonly string[],
+    options: SessionWatchOptions,
+): void {
+    const current = new Set(docs);
+    for (const [doc, { presence }] of followed) {
+        if (current.has(doc)) continue;
+        presence.release();
+        followed.delete(doc);
+    }
+    for (const doc of current) {
+        if (followed.has(doc)) continue;
+        followed.set(doc, {
+            tail: new WakeTail(doc, "watch", options),
+            presence: holdPresence(doc, options.agent ?? UNKNOWN_AGENT),
+        });
     }
 }

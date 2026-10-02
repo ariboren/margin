@@ -151,42 +151,58 @@ function detach(): void {
     process.off("exit", releaseAll);
 }
 
+export interface PresenceHold {
+    /** Removes this registration's own entry; a second call does nothing. */
+    release(): void;
+    /**
+     * Writes the entry again when it is gone though `.margin/` is there: the folder was deleted
+     * and has come back. It never brings the folder back itself.
+     */
+    renew(): void;
+}
+
 /**
- * Registers this process as `agent` on the doc, best effort, until the returned release is
- * called. A signal removes every entry this process holds and then re-raises, so the default exit
- * still happens; SIGKILL leaves stale entries, which the pid check prunes. Release removes only
- * this registration's own entry. One set of process listeners serves every registration: a watch
- * over many docs must not add its own per doc.
+ * Registers this process as `agent` on the doc, best effort, until released. A signal removes
+ * every entry this process holds and then re-raises, so the default exit still happens; SIGKILL
+ * leaves stale entries, which the pid check prunes. One set of process listeners serves every
+ * registration: a watch over many docs must not add its own per doc.
  */
-export function holdPresence(docPath: string, agent: AgentIdentity): () => void {
+export function holdPresence(docPath: string, agent: AgentIdentity): PresenceHold {
     const dir = watchersDir(docPath);
     const name = `${process.pid}-${registrations++}`;
     const entry = join(dir, name);
-    // Handlers first: once the entry is visible, a signal must already find them, or the default
-    // exit would leave it behind.
-    if (held.size === 0) attach();
-    held.add(entry);
-    try {
-        // Only beside a doc that exists: never create `.margin/` for a mistyped or deleted path.
-        if (existsSync(sidecar(docPath).doc)) {
+    const register = () => {
+        try {
             mkdirSync(dir, { recursive: true });
             // Written whole, then renamed: the daemon polls every second and a truncated file
             // would read as an unknown agent for a tick. The dot keeps the pid parser off it.
             const draft = join(dir, `.${name}`);
             writeFileSync(draft, JSON.stringify(agent));
             renameSync(draft, entry);
+        } catch {
+            // Presence is a courtesy to the page; the watcher works without it.
         }
-    } catch {
-        // Presence is a courtesy to the page; the watcher works without it.
-    }
+    };
+    // Handlers first: once the entry is visible, a signal must already find them, or the default
+    // exit would leave it behind.
+    if (held.size === 0) attach();
+    held.add(entry);
+    // Only beside a doc that exists: never create `.margin/` for a mistyped or deleted path.
+    if (existsSync(sidecar(docPath).doc)) register();
     let released = false;
-    // The directory stays: removing it when empty would race a sibling about to register.
-    return () => {
-        if (released) return;
-        released = true;
-        remove(entry);
-        held.delete(entry);
-        if (held.size === 0) detach();
+    return {
+        // The directory stays: removing it when empty would race a sibling about to register.
+        release() {
+            if (released) return;
+            released = true;
+            remove(entry);
+            held.delete(entry);
+            if (held.size === 0) detach();
+        },
+        renew() {
+            if (released || existsSync(entry) || !existsSync(sidecar(docPath).dir)) return;
+            register();
+        },
     };
 }
 
@@ -196,10 +212,10 @@ export async function withPresence<T>(
     agent: AgentIdentity,
     run: () => Promise<T>,
 ): Promise<T> {
-    const release = holdPresence(docPath, agent);
+    const hold = holdPresence(docPath, agent);
     try {
         return await run();
     } finally {
-        release();
+        hold.release();
     }
 }
