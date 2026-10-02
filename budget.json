@@ -5,7 +5,7 @@
     "pendingEditBase": 200,
     "pendingEditExtraHunk": 60,
     "ack": 24,
-    "agentHelp": 1800,
+    "agentHelp": 1830,
     "fullLoopTenThreads": 8000,
     "finishTenThreads": 5000
 }

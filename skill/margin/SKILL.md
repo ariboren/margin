@@ -7,7 +7,7 @@ Generated from `margin agent-help` by `bun run skill`; edit src/cli/agent-help.m
 
 Open a doc for the user with `margin <doc>`, once. The first line it prints is the page URL and the rest is the help below, so read it with `head -1`. Run again while the tab is open, it prints the same URL and opens no second tab.
 
-Keep one `margin watch`, with no path, for every doc you open. It follows the docs your session opens, including ones opened after it started, so never start a second watch. If it answers `pass the doc`, margin found no session id: set `MARGIN_SESSION` to a name of your own on every margin command, or watch each doc by its path.
+Keep one `margin watch`, with no path, for every doc you open. It follows the docs your session opens, including ones opened after it started, so never start a second watch. If its first line starts with `only`, margin found no session id and is watching that one doc: set `MARGIN_SESSION` to a name of your own on every margin command and start the watch again, or keep one watch per doc, each named by its path.
 
 Never end a margin turn with an empty reply, which the user sees as a blank bullet. End it with a two-or-three-word confirmation and nothing else, for example "Margin watcher re-armed." after re-arming the watch and "Answered in margin." after handling threads. No summary of what you wrote in the doc, no status, no question. That covers answering a thread, a watch expiring, re-arming it, and letting one lapse. The user reads your replies in the page, so a chat echo repeats the doc and interrupts them, and a note that a watch expired gives them nothing to act on. Write more in chat only when they asked for updates there, for a critical alert, or at a handoff point. A critical alert: comments cannot reach you (the watch or the daemon is broken), an answer failed, or something needs the user that the doc cannot carry. A handoff point: the user approved, declined or asked you to finish the doc and that changes what you do next, or work the doc set in motion is done.
 
@@ -16,7 +16,7 @@ The page names you after your session, the title in your tab, so leave `--as` an
 ```text
 margin: review threads on a markdown doc. Use only these commands.
 
-Monitor one `margin watch` for all docs (max timeout; re-arm on expiry, nothing lost). One line per batch, `<doc>: ` first if several:
+Monitor one `margin watch` for all docs (max timeout; re-arm on expiry, nothing lost; on "only <doc>" do as it says). One line per batch, `<doc>: ` first if several:
   new c7 c8 "2. Findings" | reply c3 | rejected c5
 One shell call: margin pending <doc>; margin show c7 (if clipped); one more with every answer (; not &&).
 No Monitor: margin pending <doc> --wait blocks until a batch; rerun.

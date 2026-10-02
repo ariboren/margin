@@ -1,6 +1,6 @@
 margin: review threads on a markdown doc. Use only these commands.
 
-Monitor one `margin watch` for all docs (max timeout; re-arm on expiry, nothing lost). One line per batch, `<doc>: ` first if several:
+Monitor one `margin watch` for all docs (max timeout; re-arm on expiry, nothing lost; on "only <doc>" do as it says). One line per batch, `<doc>: ` first if several:
   new c7 c8 "2. Findings" | reply c3 | rejected c5
 One shell call: margin pending <doc>; margin show c7 (if clipped); one more with every answer (; not &&).
 No Monitor: margin pending <doc> --wait blocks until a batch; rerun.

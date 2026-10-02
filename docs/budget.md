@@ -10,8 +10,9 @@ preamble and the README. The rule that every margin turn ends silently, a watch 
 was added at no byte cost: `; show <id> for context` on the finish line and
 `(last newline dropped)` on the stdin line paid for it. One watch for every doc the session opens
 and the rule that a margin turn ends with a two-or-three-word confirmation, never an empty reply
-(which the host renders as a blank bullet), then cost 99 B: the two example confirmations, the
-`<doc>: ` prefix and the no-path form (ceiling raised 1,700 → 1,800 B, owner, 2026-10-02). `watch`
+(which the host renders as a blank bullet), then cost 130 B: the two example confirmations, the
+`<doc>: ` prefix, the no-path form, and what to do when the watch says it covers `only <doc>`
+because the agent has no session id (ceiling raised 1,700 → 1,830 B, owner, 2026-10-02). `watch`
 is the widest line printed: `declined | new c1 … c10`, a decline beside ten new threads; an
 ordinary batch is 20 B. It is measured on a watch naming one doc, which prints no prefix; a watch
 covering several docs adds `<doc>: `, the doc's path from the working directory, to each line.
@@ -23,7 +24,7 @@ covering several docs adds `<doc>: `, the doc's path from the working directory,
 | `pending`, per thread, max                   |       1,300 |        664 |         674 |
 | `pending`, per user edit (base)              |         200 |        120 |         147 |
 | `reply` / `resolve` / `suggest` ack          |          24 |         16 |          16 |
-| `agent-help`                                 |       1,800 |      1,796 |       1,796 |
+| `agent-help`                                 |       1,830 |      1,827 |       1,827 |
 | 10 seeded threads, full loop, all CLI output |       8,000 |      4,773 |       4,996 |
 | 10 seeded threads handed over, finish pass   |       5,000 |      4,310 |       4,419 |
 
